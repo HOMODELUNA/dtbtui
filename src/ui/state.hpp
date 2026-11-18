@@ -44,6 +44,21 @@ inline bool node_matches(const dtb::Node& node, std::string_view lowered_filter)
     return false;
 }
 
+inline uint32_t cell_value(const std::vector<uint8_t>& raw, size_t index) {
+    const size_t offset = index * sizeof(uint32_t);
+    if (offset + sizeof(uint32_t) > raw.size()) return 0;
+    return (static_cast<uint32_t>(raw[offset]) << 24)
+         | (static_cast<uint32_t>(raw[offset + 1]) << 16)
+         | (static_cast<uint32_t>(raw[offset + 2]) << 8) | static_cast<uint32_t>(raw[offset + 3]);
+}
+
+// True when at least one reference of the property resolves to a real node.
+inline bool has_resolvable_ref(const dtb::Property& prop) {
+    return std::any_of(prop.refs.begin(), prop.refs.end(), [](const dtb::Ref& ref) {
+        return ref.node >= 0;
+    });
+}
+
 // All UI state for the tree and property panels.  Nodes are referenced by arena
 // index; the visible list is a cached pre-order walk over the expanded nodes.
 class State {
@@ -72,10 +87,16 @@ public:
     const std::vector<dtb::Property>& current_props() const { return current_node().props; }
 
     Focus focus() const { return focus_; }
+    void set_focus(Focus focus) { focus_ = focus; }
     void toggle_focus() { focus_ = focus_ == Focus::Tree ? Focus::Props : Focus::Tree; }
 
     bool show_reason() const { return show_reason_; }
     void toggle_reason() { show_reason_ = !show_reason_; }
+
+    // --- transient status message (e.g. "unresolved phandle") ----------------
+    const std::string& message() const { return message_; }
+    void set_message(std::string message) { message_ = std::move(message); }
+    void clear_message() { message_.clear(); }
 
     // --- search / filter -----------------------------------------------------
     bool search_active() const { return search_active_; }
@@ -113,6 +134,53 @@ public:
         filter_.pop_back();
         if (filter_.empty()) { restore_snapshot(); }
         else { rebuild_visible(current_node_index()); }
+    }
+
+    // --- phandle navigation --------------------------------------------------
+    size_t jump_depth() const { return jumps_.size(); }
+
+    // Jump to the node referenced by the selected property.  Returns false when
+    // there is nothing to jump to; an unresolved phandle leaves a message.
+    bool jump_to_selected_ref() {
+        const dtb::Property* prop = selected_property();
+        if (prop == nullptr || prop->refs.empty()) return false;
+
+        const dtb::Ref* target = nullptr;
+        for (const dtb::Ref& ref : prop->refs) {
+            if (ref.node >= 0) {
+                target = &ref;
+                break;
+            }
+        }
+        if (target == nullptr) {
+            set_message(fmt::format(
+                "{}: phandle 0x{:08x} 未解析，无法跳转", prop->name,
+                cell_value(prop->raw, prop->refs.front().cell_index)
+            ));
+            return false;
+        }
+
+        jumps_.push_back(JumpPoint{expanded_, current_node_index(), scroll_});
+        drop_filter();
+        for (int node = tree_.nodes[target->node].parent; node >= 0;
+             node = tree_.nodes[node].parent) {
+            expanded_.insert(node);
+        }
+        rebuild_visible(target->node);
+        return true;
+    }
+
+    // Backspace: return to the node the last jump started from.
+    bool jump_back() {
+        if (jumps_.empty()) return false;
+        JumpPoint point = std::move(jumps_.back());
+        jumps_.pop_back();
+        expanded_ = std::move(point.expanded);
+        drop_filter();
+        rebuild_visible(point.node);
+        scroll_ = point.scroll;
+        clamp_scroll();
+        return true;
     }
 
     // --- property panel ------------------------------------------------------
@@ -228,6 +296,12 @@ private:
         int scroll = 0;
     };
 
+    struct JumpPoint {
+        std::unordered_set<int> expanded;
+        int node = 0;
+        int scroll = 0;
+    };
+
     int index_of(int node) const {
         const auto it = std::find(visible_.begin(), visible_.end(), node);
         if (it == visible_.end()) return -1;
@@ -308,6 +382,14 @@ private:
         clamp_scroll();
     }
 
+    // Drop the filter but keep whatever is expanded now (used by jumps).
+    void drop_filter() {
+        filter_.clear();
+        match_count_ = 0;
+        snapshot_.reset();
+        search_active_ = false;
+    }
+
     void ensure_cursor_visible() {
         if (visible_.empty()) return;
         const int margin = std::min(2, std::max(0, (window_height_ - 1) / 2));
@@ -354,9 +436,11 @@ private:
     int window_height_ = 1;
 
     std::string filter_;
+    std::string message_;
     size_t match_count_ = 0;
     bool search_active_ = false;
     std::optional<Snapshot> snapshot_;
+    std::vector<JumpPoint> jumps_;
 
     Focus focus_ = Focus::Tree;
     bool show_reason_ = false;

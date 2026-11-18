@@ -365,3 +365,77 @@ TEST_CASE("state: a filter without matches yields an empty visible list") {
     state.move_cursor(1); // must not crash
     CHECK(state.visible().empty());
 }
+
+TEST_CASE("state: jump follows a phandle, backspace walks back") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    state.move_cursor(1); // /soc/serial@5000000
+    CHECK(state.current_node().path == "/soc/serial@5000000");
+
+    state.set_focus(ui::Focus::Props);
+    CHECK(state.selected_property()->name == "interrupt-parent");
+    CHECK(ui::has_resolvable_ref(*state.selected_property()));
+
+    CHECK(state.jump_to_selected_ref());
+    CHECK(state.current_node().path == "/soc/gic");
+    CHECK(state.jump_depth() == 1);
+    CHECK(state.is_expanded(0));
+    CHECK(state.is_expanded(1));
+
+    CHECK(state.jump_back());
+    CHECK(state.current_node().path == "/soc/serial@5000000");
+    CHECK(state.jump_depth() == 0);
+    CHECK(state.is_expanded(1));
+
+    CHECK_FALSE(state.jump_back());
+}
+
+TEST_CASE("state: jump clears an active filter") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    state.move_cursor(1); // /soc/serial@5000000
+    state.set_focus(ui::Focus::Props);
+
+    state.begin_search();
+    state.search_append('s');
+    CHECK(state.is_filtering());
+
+    CHECK(state.jump_to_selected_ref());
+    CHECK_FALSE(state.is_filtering());
+    CHECK_FALSE(state.search_active());
+    CHECK(state.current_node().path == "/soc/gic");
+}
+
+TEST_CASE("state: unresolved phandle refuses to jump and explains itself") {
+    dtb::Tree tree = phandle_tree();
+    tree.nodes[2].props[0].refs[0].node = -1;
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    state.move_cursor(1); // /soc/serial@5000000
+    state.set_focus(ui::Focus::Props);
+
+    CHECK_FALSE(state.jump_to_selected_ref());
+    CHECK(state.jump_depth() == 0);
+    CHECK(state.current_node().path == "/soc/serial@5000000");
+    CHECK(state.message().find("未解析") != std::string::npos);
+    CHECK(ui::has_resolvable_ref(*state.selected_property()) == false);
+
+    state.clear_message();
+    CHECK(state.message().empty());
+}
+
+TEST_CASE("state: Enter on a property without refs does nothing") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc, first property is none
+    state.set_focus(ui::Focus::Props);
+
+    CHECK(state.selected_property() == nullptr);
+    CHECK_FALSE(state.jump_to_selected_ref());
+    CHECK(state.message().empty());
+}

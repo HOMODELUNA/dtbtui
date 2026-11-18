@@ -36,6 +36,8 @@ std::string status_line(const State& state) {
         );
     }
     else if (state.search_active()) { line += " | 搜索: (输入 / 过滤串)"; }
+    if (state.jump_depth() != 0) line += fmt::format(" | 跳转栈: {}", state.jump_depth());
+    if (!state.message().empty()) line += " | " + state.message();
     return line;
 }
 
@@ -152,6 +154,15 @@ bool handle_key(State& state, const ftxui::Event& event, ftxui::App& app) {
             state.props_page(-1);
         return true;
     }
+    if (event == ftxui::Event::Return) {
+        if (tree_focused) { state.set_focus(Focus::Props); }
+        else { state.jump_to_selected_ref(); }
+        return true;
+    }
+    if (event == ftxui::Event::Backspace) {
+        if (!tree_focused) state.jump_back();
+        return true;
+    }
     return false;
 }
 
@@ -207,6 +218,7 @@ int run(const dtb::Tree& tree) {
     });
 
     auto component = ftxui::CatchEvent(renderer, [&](const ftxui::Event& event) {
+        state.clear_message();
         if (state.search_active()) return handle_search_key(state, event);
         return handle_key(state, event, app);
     });

@@ -71,20 +71,35 @@ public:
                 else
                     name.append(static_cast<size_t>(name_width - ftxui::string_width(name)), ' ');
 
-                const int summary_width = width - name_width - 2;
-                const std::string summary
-                    = fit_line(property_summary(prop), std::max(0, summary_width));
+                // A trailing arrow marks rows whose phandle resolves; `Enter`
+                // on those jumps to the target node.
+                const bool jumpable = has_resolvable_ref(prop);
+                const std::string marker = jumpable ? " →" : "";
+                const int summary_width = width - name_width - 2 - static_cast<int>(marker.size());
+                std::string summary = fit_line(property_summary(prop), std::max(0, summary_width));
+                if (jumpable) {
+                    const int used = ftxui::string_width(summary);
+                    if (used < summary_width)
+                        summary.append(static_cast<size_t>(summary_width - used), ' ');
+                }
                 const bool selected = index == state_.props_cursor();
 
                 if (selected) {
-                    rows.push_back(ftxui::text(name + "  " + summary) | ftxui::inverted);
+                    rows.push_back(ftxui::text(name + "  " + summary + marker) | ftxui::inverted);
                 }
                 else {
-                    rows.push_back(ftxui::hbox({
+                    ftxui::Element row = ftxui::hbox({
                         ftxui::text(name),
                         ftxui::text("  "),
                         ftxui::text(summary) | ftxui::color(value_color(prop)),
-                    }));
+                    });
+                    if (jumpable) {
+                        row = ftxui::hbox({
+                            std::move(row),
+                            ftxui::text(marker) | ftxui::color(ftxui::Color::Yellow),
+                        });
+                    }
+                    rows.push_back(std::move(row));
                 }
             }
         }
