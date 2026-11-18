@@ -11,6 +11,7 @@
 #include <ftxui/dom/elements.hpp>
 
 #include "dtb/model.hpp"
+#include "ui/detail_view.hpp"
 #include "ui/props_view.hpp"
 #include "ui/state.hpp"
 #include "ui/tree_view.hpp"
@@ -55,8 +56,13 @@ int run(const dtb::Tree& tree) {
                   props_title, props_pane(state), props_focused ? ftxui::HEAVY : ftxui::ROUNDED
               )
             | ftxui::flex;
+        const dtb::Property* selected_prop = state.selected_property();
+        ftxui::Element detail_title = ftxui::text("详情");
+        if (selected_prop != nullptr) {
+            detail_title = ftxui::text(fmt::format("详情 — {}", selected_prop->name));
+        }
         const ftxui::Element detail_panel
-            = ftxui::window(ftxui::text("详情"), ftxui::text("")) | ftxui::flex;
+            = ftxui::window(detail_title, detail_pane(state)) | ftxui::flex;
         const ftxui::Element right = ftxui::vbox({props_panel, detail_panel}) | ftxui::flex;
         const ftxui::Element body = ftxui::hbox({tree_panel, right}) | ftxui::flex;
 

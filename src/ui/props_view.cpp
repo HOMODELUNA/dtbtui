@@ -80,9 +80,11 @@ public:
                     rows.push_back(ftxui::text(name + "  " + summary) | ftxui::inverted);
                 }
                 else {
-                    rows.push_back(
-                        ftxui::hbox({ftxui::text(name), ftxui::text("  "), ftxui::text(summary)})
-                    );
+                    rows.push_back(ftxui::hbox({
+                        ftxui::text(name),
+                        ftxui::text("  "),
+                        ftxui::text(summary) | ftxui::color(value_color(prop)),
+                    }));
                 }
             }
         }
