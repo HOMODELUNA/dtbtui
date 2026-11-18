@@ -2,6 +2,8 @@ add_rules("mode.debug", "mode.release")
 add_languages("c++20")
 add_requires("ftxui")
 add_requires("fmt 12.2.1")
+add_requires("argparse v3.2")
+add_requires("doctest v2.5.3")
 
 package("libfdt")
     -- set_sourcedir("~/ssd/src/dtc")
@@ -23,6 +25,7 @@ target("dtbtui")
     add_packages("ftxui")
     add_packages("libfdt")
     add_packages("fmt")
+    add_packages("argparse")
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io
