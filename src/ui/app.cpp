@@ -26,6 +26,7 @@ bool is_quit(const ftxui::Event& event) {
 int run(const dtb::Tree& tree) {
     State state(tree);
     ftxui::App app = ftxui::App::Fullscreen();
+    app.ForceHandleCtrlC(false);
 
     auto renderer = ftxui::Renderer([&] {
         const int left_width = std::max(24, app.dimx() * 34 / 100);
@@ -48,9 +49,47 @@ int run(const dtb::Tree& tree) {
     });
 
     auto component = ftxui::CatchEvent(renderer, [&](const ftxui::Event& event) {
-        if (!is_quit(event)) return false;
-        app.Exit();
-        return true;
+        if (is_quit(event)) {
+            app.Exit();
+            return true;
+        }
+        if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {
+            state.move_cursor(1);
+            return true;
+        }
+        if (event == ftxui::Event::Character('k') || event == ftxui::Event::ArrowUp) {
+            state.move_cursor(-1);
+            return true;
+        }
+        if (event == ftxui::Event::Character('l') || event == ftxui::Event::ArrowRight) {
+            state.expand_current();
+            return true;
+        }
+        if (event == ftxui::Event::Character('h') || event == ftxui::Event::ArrowLeft) {
+            state.collapse_current();
+            return true;
+        }
+        if (event == ftxui::Event::Character(' ')) {
+            state.toggle_current();
+            return true;
+        }
+        if (event == ftxui::Event::Character('g')) {
+            state.move_to_first();
+            return true;
+        }
+        if (event == ftxui::Event::Character('G')) {
+            state.move_to_last();
+            return true;
+        }
+        if (event == ftxui::Event::CtrlD || event == ftxui::Event::PageDown) {
+            state.page(1);
+            return true;
+        }
+        if (event == ftxui::Event::CtrlU || event == ftxui::Event::PageUp) {
+            state.page(-1);
+            return true;
+        }
+        return false;
     });
 
     app.Loop(component);
@@ -59,6 +98,7 @@ int run(const dtb::Tree& tree) {
 
 int run_error(const std::string& source, const std::string& message) {
     ftxui::App app = ftxui::App::Fullscreen();
+    app.ForceHandleCtrlC(false);
     auto renderer = ftxui::Renderer([&] {
         return ftxui::vbox({
                    ftxui::text("dtbtui — 无法加载设备树") | ftxui::bold,
