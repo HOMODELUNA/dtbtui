@@ -211,3 +211,14 @@ TEST_CASE("state: moving the tree cursor resets the property cursor") {
     CHECK(state.props_cursor() == 0);
     CHECK(state.selected_property()->name == "a-0");
 }
+
+TEST_CASE("state: type reason starts collapsed and toggles") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+
+    CHECK_FALSE(state.show_reason());
+    state.toggle_reason();
+    CHECK(state.show_reason());
+    state.toggle_reason();
+    CHECK_FALSE(state.show_reason());
+}

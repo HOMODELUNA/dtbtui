@@ -40,6 +40,9 @@ public:
     Focus focus() const { return focus_; }
     void toggle_focus() { focus_ = focus_ == Focus::Tree ? Focus::Props : Focus::Tree; }
 
+    bool show_reason() const { return show_reason_; }
+    void toggle_reason() { show_reason_ = !show_reason_; }
+
     int props_cursor() const { return props_cursor_; }
     int props_scroll() const { return props_scroll_; }
     int props_window_height() const { return props_window_height_; }
@@ -230,6 +233,7 @@ private:
     int window_height_ = 1;
 
     Focus focus_ = Focus::Tree;
+    bool show_reason_ = false;
     int props_node_ = -1;
     int props_cursor_ = 0;
     int props_scroll_ = 0;

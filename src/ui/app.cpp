@@ -83,6 +83,10 @@ int run(const dtb::Tree& tree) {
             state.toggle_focus();
             return true;
         }
+        if (event == ftxui::Event::Character('i')) {
+            state.toggle_reason();
+            return true;
+        }
 
         const bool tree_focused = state.focus() == Focus::Tree;
         if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {

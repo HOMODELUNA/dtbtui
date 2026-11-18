@@ -48,11 +48,14 @@ public:
         const dtb::Property* prop = state_.selected_property();
         if (prop == nullptr) { rows.push_back(ftxui::text("(无选中属性)") | ftxui::dim); }
         else {
-            const std::vector<std::string> meta = {
+            std::vector<std::string> meta = {
                 fmt::format("字节长度: {}", prop->raw.size()),
                 fmt::format("类型: {}", dtb::kind_name(prop->kind)),
-                fmt::format("依据: {}", prop->kind_reason),
             };
+            if (state_.show_reason())
+                meta.push_back(fmt::format("依据: {}", prop->kind_reason));
+            else
+                meta.push_back("依据: 按 i 展开");
             const size_t decode_count = prop->lines.size();
             const size_t raw_count = raw_hex_line_count(prop->raw.size());
             const size_t total = 3 + decode_count + raw_count + meta.size();
