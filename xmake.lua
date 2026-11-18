@@ -4,7 +4,7 @@ add_requires("ftxui")
 add_requires("fmt 12.2.1")
 add_requires("argparse v3.2")
 add_requires("doctest v2.5.3")
-add_includedirs("include")
+add_includedirs("src")
 
 package("libfdt")
     -- set_sourcedir("~/ssd/src/dtc")
@@ -20,26 +20,19 @@ package_end()
 
 add_requires("libfdt c954f9dd835764ec69d3d9afb467c4541b47b66d")
 
-target("dtbtui-objs")
-    set_kind("phony")
-    set_default(false)
-    add_files("src/*.cpp")
-    remove_files("src/main.cpp")
-    add_packages("ftxui", "libfdt", "fmt", {public=true})
-
-
 target("dtbtui")
     set_default(true)
     set_kind("binary")
-    add_deps("dtbtui-objs")
-    add_files("src/main.cpp")
-    add_packages("argparse")
+    add_files("src/*.cpp")
+    add_files("src/**/*.cpp")
+    add_packages("ftxui", "libfdt", "fmt", "argparse")
 
-target("test")
+target("tests")
     set_default(false)
-    add_deps("dtbtui-objs")
-    add_packages("doctest")
-    add_files("tests/**.cpp")
+    set_kind("binary")
+    add_files("tests/*.cpp")
+    add_files("src/dtb/*.cpp")
+    add_packages("libfdt", "doctest", "fmt")
     add_tests("default")
 
 --

@@ -1,36 +1,107 @@
-// #include <iostream>
-// 
-// int main(int argc, char **argv) {
-//     std::cout << "hello world!" << std::endl;
-//     return 0;
-// }
+#include <argparse/argparse.hpp>
 
-#include <fmt/core.h>
-
-#include <ftxui/dom/elements.hpp>
-#include <ftxui/screen/screen.hpp>
+#include <cerrno>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
 #include <iostream>
+#include <string>
+#include <utility>
+#include <vector>
 
-int main() {
-  fmt::println("The answer is {}.", 42);
-  using namespace ftxui;
+#include "dtb/loader.hpp"
+#include "dtb/model.hpp"
 
-  // Create a simple document with three text elements.
-  Element document = hbox({
-    text("left")   | border,
-    text("middle") | border | flex,
-    text("right")  | border,
-  });
+namespace {
 
-  // Create a screen with full width and height fitting the document.
-  auto screen = Screen::Create(
-    Dimension::Full(),       // Width
-    Dimension::Fit(document) // Height
-  );
+constexpr const char* kVersion = "0.2.0";
+constexpr size_t kReadChunk = 8192;
 
-  // Render the document onto the screen.
-  Render(screen, document);
+std::vector<uint8_t> read_stream(std::istream& in, bool& ok) {
+    std::vector<uint8_t> data;
+    char buffer[kReadChunk];
+    while (in) {
+        in.read(buffer, sizeof(buffer));
+        const std::streamsize count = in.gcount();
+        if (count <= 0) break;
+        const auto* begin = reinterpret_cast<const uint8_t*>(buffer);
+        data.insert(data.end(), begin, begin + count);
+    }
+    ok = !in.bad();
+    return data;
+}
 
-  // Print the screen to the console.
-  screen.Print();
+char hex_digit(uint8_t value) {
+    return "0123456789abcdef"[value & 0x0f];
+}
+
+void dump_tree(const dtb::Tree& tree, std::ostream& out) {
+    for (const dtb::Node& node : tree.nodes) {
+        const std::string indent(node.depth * 2, ' ');
+        out << indent << node.path << " (depth " << node.depth << ")\n";
+
+        const std::string prop_indent(node.depth * 2 + 2, ' ');
+        for (const dtb::Property& prop : node.props) {
+            out << prop_indent << prop.name << " =";
+            for (uint8_t byte : prop.raw)
+                out << ' ' << hex_digit(byte >> 4) << hex_digit(byte);
+            out << '\n';
+        }
+    }
+    out << "\n# nodes: " << tree.nodes.size() << ", properties: " << tree.total_props << '\n';
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    argparse::ArgumentParser program("dtbtui", kVersion);
+    program.add_description("Terminal viewer for device-tree blobs.");
+    program.add_argument("--dump")
+        .help("print the whole tree as plain text instead of opening the TUI")
+        .default_value(false)
+        .implicit_value(true);
+    program.add_argument("path").help("path to a .dtb file, or - to read stdin");
+
+    try {
+        program.parse_args(argc, argv);
+    }
+    catch (const std::runtime_error& error) {
+        std::cerr << program;
+        std::cerr << "dtbtui: " << error.what() << '\n';
+        return 2;
+    }
+
+    const std::string path = program.get<std::string>("path");
+    if (!program.get<bool>("--dump")) {
+        std::cerr << "dtbtui: 交互界面尚未实现，请使用 --dump\n";
+        return 2;
+    }
+
+    std::ifstream file;
+    std::istream* input = &std::cin;
+    if (path != "-") {
+        file.open(path, std::ios::binary);
+        if (!file) {
+            std::cerr << "dtbtui: " << std::strerror(errno) << ": " << path << '\n';
+            return 2;
+        }
+        input = &file;
+    }
+
+    bool read_ok = false;
+    std::vector<uint8_t> blob = read_stream(*input, read_ok);
+    const std::string source = path == "-" ? "<stdin>" : path;
+    if (!read_ok) {
+        std::cerr << "dtbtui: 读取失败: " << source << '\n';
+        return 2;
+    }
+
+    dtb::LoadResult result = dtb::load(std::move(blob), source);
+    if (!result.tree) {
+        std::cerr << "dtbtui: " << source << ": " << result.error << '\n';
+        return 1;
+    }
+
+    dump_tree(*result.tree, std::cout);
+    return 0;
 }
