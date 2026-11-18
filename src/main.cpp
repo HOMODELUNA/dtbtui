@@ -1,0 +1,36 @@
+// #include <iostream>
+// 
+// int main(int argc, char **argv) {
+//     std::cout << "hello world!" << std::endl;
+//     return 0;
+// }
+
+#include <fmt/core.h>
+
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
+#include <iostream>
+
+int main() {
+  fmt::println("The answer is {}.", 42);
+  using namespace ftxui;
+
+  // Create a simple document with three text elements.
+  Element document = hbox({
+    text("left")   | border,
+    text("middle") | border | flex,
+    text("right")  | border,
+  });
+
+  // Create a screen with full width and height fitting the document.
+  auto screen = Screen::Create(
+    Dimension::Full(),       // Width
+    Dimension::Fit(document) // Height
+  );
+
+  // Render the document onto the screen.
+  Render(screen, document);
+
+  // Print the screen to the console.
+  screen.Print();
+}
