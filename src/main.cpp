@@ -12,6 +12,7 @@
 #include "dtb/decode.hpp"
 #include "dtb/loader.hpp"
 #include "dtb/model.hpp"
+#include "ui/app.hpp"
 
 namespace {
 
@@ -77,10 +78,7 @@ int main(int argc, char** argv) {
     }
 
     const std::string path = program.get<std::string>("path");
-    if (!program.get<bool>("--dump")) {
-        std::cerr << "dtbtui: 交互界面尚未实现，请使用 --dump\n";
-        return 2;
-    }
+    const bool dump = program.get<bool>("--dump");
 
     std::ifstream file;
     std::istream* input = &std::cin;
@@ -103,12 +101,16 @@ int main(int argc, char** argv) {
 
     dtb::LoadResult result = dtb::load(std::move(blob), source);
     if (!result.tree) {
+        if (!dump) return ui::run_error(source, result.error);
         std::cerr << "dtbtui: " << source << ": " << result.error << '\n';
         return 1;
     }
 
     dtb::Tree tree = std::move(*result.tree);
     dtb::decode(tree);
-    dump_tree(tree, std::cout);
-    return 0;
+    if (dump) {
+        dump_tree(tree, std::cout);
+        return 0;
+    }
+    return ui::run(tree);
 }
