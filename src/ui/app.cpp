@@ -13,6 +13,7 @@
 
 #include "dtb/model.hpp"
 #include "ui/detail_view.hpp"
+#include "ui/help_view.hpp"
 #include "ui/props_view.hpp"
 #include "ui/state.hpp"
 #include "ui/text_util.hpp"
@@ -56,6 +57,16 @@ bool is_character(const ftxui::Event& event) {
     return event.is_character() && !event.character().empty();
 }
 
+// Handle the key bindings while the help overlay is open: only `?`, `Esc` and
+// `q` do anything, and all three close the overlay (never quit from here).
+// Every other event is swallowed so the panels underneath stay untouched.
+bool handle_help_key(State& state, const ftxui::Event& event) {
+    if (is_quit(event) || event == ftxui::Event::Character('?') || event == ftxui::Event::Escape) {
+        state.close_help();
+    }
+    return true;
+}
+
 // Handle the key bindings while the search input line is open.
 bool handle_search_key(State& state, const ftxui::Event& event) {
     if (event == ftxui::Event::Escape) {
@@ -77,9 +88,31 @@ bool handle_search_key(State& state, const ftxui::Event& event) {
     return true;
 }
 
+bool handle_mouse(State& state, ftxui::Event& event) {
+    if (!event.is_mouse()) return false;
+    const ftxui::Mouse& mouse = event.mouse();
+    if (mouse.button == ftxui::Mouse::WheelUp) {
+        state.wheel(mouse.x, mouse.y, -1);
+        return true;
+    }
+    if (mouse.button == ftxui::Mouse::WheelDown) {
+        state.wheel(mouse.x, mouse.y, 1);
+        return true;
+    }
+    if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed) {
+        state.click(mouse.x, mouse.y);
+        return true;
+    }
+    return true;
+}
+
 bool handle_key(State& state, const ftxui::Event& event, ftxui::App& app) {
     if (is_quit(event)) {
         app.Exit();
+        return true;
+    }
+    if (event == ftxui::Event::Character('?')) {
+        state.toggle_help();
         return true;
     }
     if (event == ftxui::Event::Character('/')) {
@@ -213,12 +246,22 @@ int run(const dtb::Tree& tree) {
             = state.search_active() ? search_line(state) : ftxui::text(status_line(state));
         ftxui::Element footer_element = footer | ftxui::dim;
 
-        return ftxui::vbox({title, ftxui::separator(), body, ftxui::separator(), footer_element})
-             | ftxui::flex;
+        ftxui::Element screen
+            = ftxui::vbox({title, ftxui::separator(), body, ftxui::separator(), footer_element})
+            | ftxui::flex;
+        if (state.help_visible()) {
+            screen = ftxui::dbox({
+                std::move(screen),
+                help_overlay() | ftxui::clear_under | ftxui::center,
+            });
+        }
+        return screen;
     });
 
-    auto component = ftxui::CatchEvent(renderer, [&](const ftxui::Event& event) {
+    auto component = ftxui::CatchEvent(renderer, [&](ftxui::Event event) {
         state.clear_message();
+        if (state.help_visible()) return handle_help_key(state, event);
+        if (handle_mouse(state, event)) return true;
         if (state.search_active()) return handle_search_key(state, event);
         return handle_key(state, event, app);
     });

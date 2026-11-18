@@ -42,7 +42,7 @@ public:
 
     void SetBox(ftxui::Box box) override {
         box_ = box;
-        state_.set_props_window_height(box.y_max - box.y_min + 1);
+        state_.set_props_box(PaneBox{box.x_min, box.y_min, box.x_max, box.y_max});
     }
 
     void Render(ftxui::Screen& screen) override {

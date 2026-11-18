@@ -18,8 +18,25 @@ namespace ui {
 
 enum class Focus { Tree, Props };
 
+// Rows moved by one mouse-wheel notch, per the plan's key table.
+constexpr int kMouseScrollLines = 3;
 // Longest accepted search string; keeps a runaway key repeat from growing it forever.
 constexpr size_t kMaxFilterLength = 64;
+
+// Rectangle of a panel in screen coordinates, reported by the panel element.
+struct PaneBox {
+    int x_min = 0;
+    int y_min = 0;
+    int x_max = -1;
+    int y_max = -1;
+
+    int width() const { return x_max - x_min + 1; }
+    int height() const { return y_max - y_min + 1; }
+
+    bool contains(int x, int y) const {
+        return x_min <= x && x <= x_max && y_min <= y && y <= y_max;
+    }
+};
 
 inline std::string to_lower(std::string_view text) {
     std::string lowered;
@@ -92,6 +109,10 @@ public:
 
     bool show_reason() const { return show_reason_; }
     void toggle_reason() { show_reason_ = !show_reason_; }
+
+    bool help_visible() const { return help_visible_; }
+    void toggle_help() { help_visible_ = !help_visible_; }
+    void close_help() { help_visible_ = false; }
 
     // --- transient status message (e.g. "unresolved phandle") ----------------
     const std::string& message() const { return message_; }
@@ -194,6 +215,11 @@ public:
         return &props[props_cursor_];
     }
 
+    void set_props_box(PaneBox box) {
+        props_box_ = box;
+        set_props_window_height(box.height());
+    }
+
     void set_props_window_height(int height) {
         props_window_height_ = std::max(1, height);
         clamp_props_scroll();
@@ -225,6 +251,11 @@ public:
     }
 
     // --- tree panel ----------------------------------------------------------
+    void set_tree_box(PaneBox box) {
+        tree_box_ = box;
+        set_window_height(box.height());
+    }
+
     void set_window_height(int height) {
         window_height_ = std::max(1, height);
         clamp_scroll();
@@ -289,6 +320,96 @@ public:
         rebuild_visible(node);
     }
 
+    // --- mouse ---------------------------------------------------------------
+    // Row of `visible` under the given screen coordinate, or -1.
+    int tree_row_at(int x, int y) const {
+        if (!tree_box_.contains(x, y)) return -1;
+        return visible_row(scroll_ + (y - tree_box_.y_min));
+    }
+
+    // True when the coordinate falls on the ▸/▾ glyph in front of the row's node.
+    bool tree_toggle_at(int x, int y) const {
+        const int row = tree_row_at(x, y);
+        if (row < 0) return false;
+        const dtb::Node& node = tree_.nodes[visible_[row]];
+        if (node.children.empty()) return false;
+        const int glyph = tree_box_.x_min + node.depth * 2;
+        return x == glyph || x == glyph + 1;
+    }
+
+    bool select_tree_row(int row) {
+        if (visible_row(row) < 0) return false;
+        cursor_ = row;
+        ensure_cursor_visible();
+        sync_props();
+        return true;
+    }
+
+    // Toggle the row's fold without moving the cursor off its current node.
+    bool toggle_tree_row(int row) {
+        if (visible_row(row) < 0) return false;
+        const int node = visible_[row];
+        if (tree_.nodes[node].children.empty()) return false;
+        const int keep = current_node_index();
+        if (expanded_.contains(node))
+            expanded_.erase(node);
+        else
+            expanded_.insert(node);
+        rebuild_visible(keep);
+        return true;
+    }
+
+    int props_row_at(int x, int y) const {
+        if (!props_box_.contains(x, y)) return -1;
+        const int row = props_scroll_ + (y - props_box_.y_min);
+        if (row < 0 || row >= static_cast<int>(current_props().size())) return -1;
+        return row;
+    }
+
+    bool select_props_row(int row) {
+        const int count = static_cast<int>(current_props().size());
+        if (row < 0 || row >= count) return false;
+        props_cursor_ = row;
+        ensure_props_cursor_visible();
+        return true;
+    }
+
+    // Wheel: scroll the pane under the pointer, keeping the cursor inside it.
+    void wheel(int x, int y, int direction) {
+        if (tree_box_.contains(x, y)) { scroll_tree(direction * kMouseScrollLines); }
+        else if (props_box_.contains(x, y)) { scroll_props(direction * kMouseScrollLines); }
+    }
+
+    // Left click: focus the pane under the pointer and select the row.
+    // Clicking the fold glyph of a tree row only toggles the fold.
+    void click(int x, int y) {
+        if (tree_box_.contains(x, y)) {
+            focus_ = Focus::Tree;
+            const int row = tree_row_at(x, y);
+            if (row < 0) return;
+            if (tree_toggle_at(x, y)) { toggle_tree_row(row); }
+            else { select_tree_row(row); }
+            return;
+        }
+        if (props_box_.contains(x, y)) {
+            focus_ = Focus::Props;
+            const int row = props_row_at(x, y);
+            if (row >= 0) select_props_row(row);
+        }
+    }
+
+    void scroll_tree(int lines) {
+        scroll_ += lines;
+        clamp_scroll();
+        keep_cursor_in_window();
+    }
+
+    void scroll_props(int lines) {
+        props_scroll_ += lines;
+        clamp_props_scroll();
+        keep_props_cursor_in_window();
+    }
+
 private:
     struct Snapshot {
         std::unordered_set<int> expanded;
@@ -301,6 +422,11 @@ private:
         int node = 0;
         int scroll = 0;
     };
+
+    int visible_row(int row) const {
+        if (row < 0 || row >= static_cast<int>(visible_.size())) return -1;
+        return row;
+    }
 
     int index_of(int node) const {
         const auto it = std::find(visible_.begin(), visible_.end(), node);
@@ -399,6 +525,15 @@ private:
         clamp_scroll();
     }
 
+    void keep_cursor_in_window() {
+        if (visible_.empty()) return;
+        cursor_ = std::clamp(cursor_, 0, static_cast<int>(visible_.size()) - 1);
+        if (cursor_ < scroll_) cursor_ = scroll_;
+        if (cursor_ >= scroll_ + window_height_) cursor_ = scroll_ + window_height_ - 1;
+        cursor_ = std::clamp(cursor_, 0, static_cast<int>(visible_.size()) - 1);
+        sync_props();
+    }
+
     void clamp_scroll() {
         const int max_scroll = std::max(0, static_cast<int>(visible_.size()) - window_height_);
         scroll_ = std::clamp(scroll_, 0, max_scroll);
@@ -422,6 +557,16 @@ private:
         clamp_props_scroll();
     }
 
+    void keep_props_cursor_in_window() {
+        const int count = static_cast<int>(current_props().size());
+        if (count == 0) return;
+        props_cursor_ = std::clamp(props_cursor_, 0, count - 1);
+        if (props_cursor_ < props_scroll_) props_cursor_ = props_scroll_;
+        if (props_cursor_ >= props_scroll_ + props_window_height_)
+            props_cursor_ = props_scroll_ + props_window_height_ - 1;
+        props_cursor_ = std::clamp(props_cursor_, 0, count - 1);
+    }
+
     void clamp_props_scroll() {
         const int count = static_cast<int>(current_props().size());
         const int max_scroll = std::max(0, count - props_window_height_);
@@ -439,8 +584,12 @@ private:
     std::string message_;
     size_t match_count_ = 0;
     bool search_active_ = false;
+    bool help_visible_ = false;
     std::optional<Snapshot> snapshot_;
     std::vector<JumpPoint> jumps_;
+
+    PaneBox tree_box_;
+    PaneBox props_box_;
 
     Focus focus_ = Focus::Tree;
     bool show_reason_ = false;

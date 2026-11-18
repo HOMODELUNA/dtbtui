@@ -439,3 +439,91 @@ TEST_CASE("state: Enter on a property without refs does nothing") {
     CHECK_FALSE(state.jump_to_selected_ref());
     CHECK(state.message().empty());
 }
+
+TEST_CASE("state: clicking a tree row selects it and moves the focus") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.set_focus(ui::Focus::Props);
+    state.set_tree_box(ui::PaneBox{10, 5, 40, 9});
+
+    state.click(20, 6); // row 1 = /soc, text column (not the glyph)
+    CHECK(state.focus() == ui::Focus::Tree);
+    CHECK(state.current_node().path == "/soc");
+
+    state.click(20, 30); // outside the pane
+    CHECK(state.current_node().path == "/soc");
+
+    state.click(20, 8); // row 3, past the last visible row
+    CHECK(state.current_node().path == "/soc");
+}
+
+TEST_CASE("state: clicking the fold glyph only toggles") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.set_tree_box(ui::PaneBox{10, 5, 40, 9});
+    CHECK(state.cursor() == 0);
+
+    CHECK(state.tree_toggle_at(12, 6)); // /soc's glyph sits at x = 10 + depth*2
+    state.click(12, 6);
+    CHECK(state.is_expanded(1));
+    CHECK(state.current_node().path == "/");
+
+    state.click(12, 6);
+    CHECK_FALSE(state.is_expanded(1));
+    CHECK(state.current_node().path == "/");
+}
+
+TEST_CASE("state: clicking a property row selects it") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+    state.set_focus(ui::Focus::Tree);
+    state.set_props_box(ui::PaneBox{50, 5, 90, 9});
+
+    state.click(55, 5);
+    CHECK(state.focus() == ui::Focus::Props);
+    CHECK(state.props_cursor() == 0);
+
+    state.click(55, 7); // third row
+    CHECK(state.props_cursor() == 2);
+    CHECK(state.selected_property()->name == "root-2");
+}
+
+TEST_CASE("state: mouse wheel scrolls three rows and keeps the cursor inside") {
+    const dtb::Tree tree = wide_tree();
+    ui::State state(tree);
+    state.set_tree_box(ui::PaneBox{10, 5, 40, 9}); // 5 rows
+
+    state.wheel(12, 6, 1); // wheel down inside the tree pane
+    CHECK(state.scroll() == 3);
+    CHECK(state.cursor() == 3);
+    CHECK(state.cursor() >= state.scroll());
+    CHECK(state.cursor() < state.scroll() + state.window_height());
+
+    state.wheel(12, 6, -1);
+    CHECK(state.scroll() == 0);
+    CHECK(state.cursor() == 3);
+
+    state.wheel(100, 6, 1); // outside every pane
+    CHECK(state.scroll() == 0);
+}
+
+TEST_CASE("state: wheel scrolling the property pane keeps its cursor inside") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+    state.set_props_box(ui::PaneBox{50, 5, 90, 9}); // 5 rows
+
+    state.wheel(60, 6, 1);
+    CHECK(state.props_scroll() == 0); // 5 properties fit in 5 rows
+    CHECK(state.props_cursor() == 0);
+}
+
+TEST_CASE("state: help overlay toggles") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+
+    CHECK_FALSE(state.help_visible());
+    state.toggle_help();
+    CHECK(state.help_visible());
+    state.close_help();
+    CHECK_FALSE(state.help_visible());
+}
