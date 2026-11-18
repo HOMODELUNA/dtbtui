@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -14,6 +15,7 @@
 #include "ui/detail_view.hpp"
 #include "ui/props_view.hpp"
 #include "ui/state.hpp"
+#include "ui/text_util.hpp"
 #include "ui/tree_view.hpp"
 
 namespace ui {
@@ -21,6 +23,136 @@ namespace {
 
 bool is_quit(const ftxui::Event& event) {
     return event == ftxui::Event::Character('q') || event == ftxui::Event::CtrlC;
+}
+
+std::string status_line(const State& state) {
+    const std::string focus_name = state.focus() == Focus::Tree ? "设备树" : "属性";
+
+    std::string line = fmt::format("焦点: {} | {}", focus_name, state.current_node().path);
+    if (state.is_filtering()) {
+        line += fmt::format(
+            " | 搜索: {} ({} 命中{})", state.filter(), state.match_count(),
+            state.search_active() ? ", 输入中" : ""
+        );
+    }
+    else if (state.search_active()) { line += " | 搜索: (输入 / 过滤串)"; }
+    return line;
+}
+
+// Search input line placeholder shown in place of the status line.
+ftxui::Element search_line(const State& state) {
+    const std::string prefix = "搜索: ";
+    std::string text = prefix + state.filter();
+    if (state.is_filtering())
+        text += fmt::format("▏  {} 命中，Esc 清空", state.match_count());
+    else
+        text += "▏  输入过滤串，Esc 取消";
+    return ftxui::text(std::move(text)) | ftxui::color(ftxui::Color::Yellow);
+}
+
+bool is_character(const ftxui::Event& event) {
+    return event.is_character() && !event.character().empty();
+}
+
+// Handle the key bindings while the search input line is open.
+bool handle_search_key(State& state, const ftxui::Event& event) {
+    if (event == ftxui::Event::Escape) {
+        state.cancel_search();
+        return true;
+    }
+    if (event == ftxui::Event::Backspace) {
+        state.search_backspace();
+        return true;
+    }
+    if (event == ftxui::Event::Return) {
+        state.confirm_search();
+        return true;
+    }
+    if (is_character(event)) {
+        state.search_append(event.character().front());
+        return true;
+    }
+    return true;
+}
+
+bool handle_key(State& state, const ftxui::Event& event, ftxui::App& app) {
+    if (is_quit(event)) {
+        app.Exit();
+        return true;
+    }
+    if (event == ftxui::Event::Character('/')) {
+        state.begin_search();
+        return true;
+    }
+    if (event == ftxui::Event::Escape) {
+        state.cancel_search();
+        return true;
+    }
+    if (event == ftxui::Event::Tab || event == ftxui::Event::TabReverse) {
+        state.toggle_focus();
+        return true;
+    }
+    if (event == ftxui::Event::Character('i')) {
+        state.toggle_reason();
+        return true;
+    }
+
+    const bool tree_focused = state.focus() == Focus::Tree;
+    if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {
+        if (tree_focused)
+            state.move_cursor(1);
+        else
+            state.move_props_cursor(1);
+        return true;
+    }
+    if (event == ftxui::Event::Character('k') || event == ftxui::Event::ArrowUp) {
+        if (tree_focused)
+            state.move_cursor(-1);
+        else
+            state.move_props_cursor(-1);
+        return true;
+    }
+    if (event == ftxui::Event::Character('l') || event == ftxui::Event::ArrowRight) {
+        if (tree_focused) state.expand_current();
+        return true;
+    }
+    if (event == ftxui::Event::Character('h') || event == ftxui::Event::ArrowLeft) {
+        if (tree_focused) state.collapse_current();
+        return true;
+    }
+    if (event == ftxui::Event::Character(' ')) {
+        if (tree_focused) state.toggle_current();
+        return true;
+    }
+    if (event == ftxui::Event::Character('g')) {
+        if (tree_focused)
+            state.move_to_first();
+        else
+            state.props_first();
+        return true;
+    }
+    if (event == ftxui::Event::Character('G')) {
+        if (tree_focused)
+            state.move_to_last();
+        else
+            state.props_last();
+        return true;
+    }
+    if (event == ftxui::Event::CtrlD || event == ftxui::Event::PageDown) {
+        if (tree_focused)
+            state.page(1);
+        else
+            state.props_page(1);
+        return true;
+    }
+    if (event == ftxui::Event::CtrlU || event == ftxui::Event::PageUp) {
+        if (tree_focused)
+            state.page(-1);
+        else
+            state.props_page(-1);
+        return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -66,84 +198,17 @@ int run(const dtb::Tree& tree) {
         const ftxui::Element right = ftxui::vbox({props_panel, detail_panel}) | ftxui::flex;
         const ftxui::Element body = ftxui::hbox({tree_panel, right}) | ftxui::flex;
 
-        const std::string focus_name = tree_focused ? "设备树" : "属性";
-        const ftxui::Element status
-            = ftxui::text(fmt::format("焦点: {} | {}", focus_name, state.current_node().path))
-            | ftxui::dim;
-        return ftxui::vbox({title, ftxui::separator(), body, ftxui::separator(), status})
+        const ftxui::Element footer
+            = state.search_active() ? search_line(state) : ftxui::text(status_line(state));
+        ftxui::Element footer_element = footer | ftxui::dim;
+
+        return ftxui::vbox({title, ftxui::separator(), body, ftxui::separator(), footer_element})
              | ftxui::flex;
     });
 
     auto component = ftxui::CatchEvent(renderer, [&](const ftxui::Event& event) {
-        if (is_quit(event)) {
-            app.Exit();
-            return true;
-        }
-        if (event == ftxui::Event::Tab || event == ftxui::Event::TabReverse) {
-            state.toggle_focus();
-            return true;
-        }
-        if (event == ftxui::Event::Character('i')) {
-            state.toggle_reason();
-            return true;
-        }
-
-        const bool tree_focused = state.focus() == Focus::Tree;
-        if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {
-            if (tree_focused)
-                state.move_cursor(1);
-            else
-                state.move_props_cursor(1);
-            return true;
-        }
-        if (event == ftxui::Event::Character('k') || event == ftxui::Event::ArrowUp) {
-            if (tree_focused)
-                state.move_cursor(-1);
-            else
-                state.move_props_cursor(-1);
-            return true;
-        }
-        if (event == ftxui::Event::Character('l') || event == ftxui::Event::ArrowRight) {
-            if (tree_focused) state.expand_current();
-            return true;
-        }
-        if (event == ftxui::Event::Character('h') || event == ftxui::Event::ArrowLeft) {
-            if (tree_focused) state.collapse_current();
-            return true;
-        }
-        if (event == ftxui::Event::Character(' ')) {
-            if (tree_focused) state.toggle_current();
-            return true;
-        }
-        if (event == ftxui::Event::Character('g')) {
-            if (tree_focused)
-                state.move_to_first();
-            else
-                state.props_first();
-            return true;
-        }
-        if (event == ftxui::Event::Character('G')) {
-            if (tree_focused)
-                state.move_to_last();
-            else
-                state.props_last();
-            return true;
-        }
-        if (event == ftxui::Event::CtrlD || event == ftxui::Event::PageDown) {
-            if (tree_focused)
-                state.page(1);
-            else
-                state.props_page(1);
-            return true;
-        }
-        if (event == ftxui::Event::CtrlU || event == ftxui::Event::PageUp) {
-            if (tree_focused)
-                state.page(-1);
-            else
-                state.props_page(-1);
-            return true;
-        }
-        return false;
+        if (state.search_active()) return handle_search_key(state, event);
+        return handle_key(state, event, app);
     });
 
     app.Loop(component);

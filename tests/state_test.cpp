@@ -222,3 +222,146 @@ TEST_CASE("state: type reason starts collapsed and toggles") {
     state.toggle_reason();
     CHECK_FALSE(state.show_reason());
 }
+
+namespace {
+
+// Build a big-endian u32 property value.
+std::vector<uint8_t> cells(uint32_t value) {
+    return {
+        static_cast<uint8_t>(value >> 24),
+        static_cast<uint8_t>(value >> 16),
+        static_cast<uint8_t>(value >> 8),
+        static_cast<uint8_t>(value),
+    };
+}
+
+// / (0) -> soc (1) -> serial@5000000 (2) [interrupt-parent -> gic]
+//                   -> gic (3) [phandle = 5]
+//                   -> uart (4)
+dtb::Tree phandle_tree() {
+    dtb::Tree tree;
+    tree.nodes.push_back(node("/", "/", -1, 0, {1}));
+    tree.nodes.push_back(node("soc", "/soc", 0, 1, {2, 3, 4}));
+    tree.nodes.push_back(node("serial@5000000", "/soc/serial@5000000", 1, 2));
+    tree.nodes.push_back(node("gic", "/soc/gic", 1, 2));
+    tree.nodes.push_back(node("uart", "/soc/uart", 1, 2));
+
+    dtb::Property interrupt_parent = prop("interrupt-parent");
+    interrupt_parent.raw = cells(5);
+    interrupt_parent.kind = dtb::ValueKind::Cells;
+    interrupt_parent.refs.push_back(dtb::Ref{0, 3});
+    tree.nodes[2].props.push_back(interrupt_parent);
+
+    dtb::Property phandle = prop("phandle");
+    phandle.raw = cells(5);
+    phandle.kind = dtb::ValueKind::Cells;
+    phandle.refs.push_back(dtb::Ref{0, 3});
+    tree.nodes[3].props.push_back(phandle);
+    return tree;
+}
+
+} // namespace
+
+TEST_CASE("state: search filters to matches and their ancestors") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    CHECK(state.visible().size() == 5);
+
+    state.begin_search();
+    CHECK(state.search_active());
+    for (const char* character = "UART"; *character != '\0'; ++character)
+        state.search_append(*character);
+
+    CHECK(state.is_filtering());
+    CHECK(state.filter() == "UART");
+    // /soc/uart plus the ancestor chain (/ and /soc).
+    const std::vector<int> expected = {0, 1, 4};
+    CHECK(state.visible() == expected);
+    CHECK(state.match_count() == 1);
+    // The cursor keeps its node while it stays visible: /soc came before the filter.
+    CHECK(state.current_node().path == "/soc");
+}
+
+TEST_CASE("state: search matches property names too") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.begin_search();
+    for (const char* character = "interrupt-parent"; *character != '\0'; ++character)
+        state.search_append(*character);
+
+    const std::vector<int> expected = {0, 1, 2};
+    CHECK(state.visible() == expected);
+    CHECK(state.match_count() == 1);
+}
+
+TEST_CASE("state: search ignores the fold state") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    CHECK_FALSE(state.is_expanded(1));
+
+    state.begin_search();
+    state.search_append('g');
+    state.search_append('i');
+    state.search_append('c');
+
+    // /soc stays collapsed in the folded tree, but the matching grandchild shows.
+    const std::vector<int> expected = {0, 1, 3};
+    CHECK(state.visible() == expected);
+    CHECK_FALSE(state.is_expanded(1));
+}
+
+TEST_CASE("state: cancel search restores folds, cursor and scroll") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    state.move_cursor(1); // /soc/serial@5000000
+    const std::vector<int> before = state.visible();
+    const int cursor_before = state.cursor();
+
+    state.begin_search();
+    state.search_append('u');
+    state.search_append('a');
+    state.search_append('r');
+    CHECK(state.visible() != before);
+
+    state.cancel_search();
+    CHECK_FALSE(state.search_active());
+    CHECK_FALSE(state.is_filtering());
+    CHECK(state.visible() == before);
+    CHECK(state.cursor() == cursor_before);
+    CHECK(state.current_node().path == "/soc/serial@5000000");
+    CHECK(state.is_expanded(1));
+}
+
+TEST_CASE("state: backspacing an empty filter restores the tree") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    const std::vector<int> before = state.visible();
+
+    state.begin_search();
+    state.search_append('z');
+    CHECK(state.visible().empty()); // nothing matches "z"
+    state.search_backspace();
+    CHECK_FALSE(state.is_filtering());
+    CHECK(state.visible() == before);
+
+    state.confirm_search();
+    CHECK_FALSE(state.search_active());
+}
+
+TEST_CASE("state: a filter without matches yields an empty visible list") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.begin_search();
+    state.search_append('q');
+    state.search_append('q');
+    state.search_append('q');
+
+    CHECK(state.visible().empty());
+    CHECK(state.match_count() == 0);
+    state.move_cursor(1); // must not crash
+    CHECK(state.visible().empty());
+}

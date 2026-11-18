@@ -45,6 +45,16 @@ public:
         if (height <= 0 || width <= 0) return;
 
         const std::vector<int>& visible = state_.visible();
+        if (visible.empty()) {
+            const std::string text = state_.is_filtering() ? "无匹配" : "(空树)";
+            ftxui::Element content = ftxui::vbox({
+                ftxui::text(fit_line(text, width)) | ftxui::dim,
+            });
+            content->ComputeRequirement();
+            content->SetBox(box_);
+            content->Render(screen);
+            return;
+        }
         ftxui::Elements rows;
         rows.reserve(static_cast<size_t>(height));
         for (int row = 0; row < height; ++row) {
