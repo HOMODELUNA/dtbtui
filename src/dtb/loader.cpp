@@ -34,10 +34,32 @@ public:
             return std::move(tree_);
         }
         build_node(root, -1, 0);
+        build_phandle_index();
         return std::move(tree_);
     }
 
 private:
+    static uint32_t read_be32(const std::vector<uint8_t>& raw) {
+        return (static_cast<uint32_t>(raw[0]) << 24) | (static_cast<uint32_t>(raw[1]) << 16)
+             | (static_cast<uint32_t>(raw[2]) << 8) | static_cast<uint32_t>(raw[3]);
+    }
+
+    // Register every node reachable through phandle/linux,phandle.  The first
+    // value seen in tree order wins, matching the plan's duplicate policy.
+    void build_phandle_index() {
+        for (size_t index = 0; index < tree_.nodes.size(); ++index) {
+            Node& node = tree_.nodes[index];
+            for (const Property& prop : node.props) {
+                if (prop.name != "phandle" && prop.name != "linux,phandle") continue;
+                if (prop.raw.size() < sizeof(uint32_t)) continue;
+                const uint32_t value = read_be32(prop.raw);
+                node.phandle = static_cast<int>(value);
+                tree_.phandle_map.emplace(value, static_cast<int>(index));
+                break;
+            }
+        }
+    }
+
     int build_node(int offset, int parent, int depth) {
         const int index = static_cast<int>(tree_.nodes.size());
         tree_.nodes.emplace_back();

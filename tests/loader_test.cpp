@@ -2,6 +2,7 @@
 
 #include <libfdt.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -236,4 +237,30 @@ TEST_CASE("loader rejects empty, non-dtb and truncated blobs") {
         CHECK_FALSE(result.tree.has_value());
         CHECK_FALSE(result.error.empty());
     }
+}
+TEST_CASE("loader registers phandles and keeps the first duplicate") {
+    Blob blob;
+    const int dup_a = blob.add_node("/dup-a");
+    blob.set_prop(dup_a, "phandle", u32_cell(7));
+    const int dup_b = blob.add_node("/dup-b");
+    blob.set_prop(dup_b, "phandle", u32_cell(7));
+    const int legacy = blob.add_node("/legacy");
+    blob.set_prop(legacy, "linux,phandle", u32_cell(9));
+
+    const dtb::Tree tree = load_ok(blob.bytes());
+    const int a = find_path(tree, "/dup-a");
+    const int b = find_path(tree, "/dup-b");
+    const int old = find_path(tree, "/legacy");
+    REQUIRE(a >= 0);
+    REQUIRE(b >= 0);
+    REQUIRE(old >= 0);
+
+    CHECK(tree.nodes[a].phandle == 7);
+    CHECK(tree.nodes[b].phandle == 7);
+    CHECK(tree.nodes[old].phandle == 9);
+
+    REQUIRE(tree.phandle_map.count(7) == 1);
+    CHECK(tree.phandle_map.at(7) == std::min(a, b));
+    REQUIRE(tree.phandle_map.count(9) == 1);
+    CHECK(tree.phandle_map.at(9) == old);
 }

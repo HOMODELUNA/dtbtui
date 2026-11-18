@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace dtb {
@@ -16,6 +17,12 @@ enum class ValueKind {
     StringList, // several NUL-terminated strings
 };
 
+// A 4-byte cell in a property value that refers to another node.
+struct Ref {
+    size_t cell_index = 0; // which cell holds the phandle
+    int node = -1;         // target node index, -1 when unresolved
+};
+
 // One property as it appears in the dtb.  `raw` holds the exact value bytes
 // (big-endian, as stored in the blob); `lines` holds the decoded display.
 struct Property {
@@ -24,6 +31,7 @@ struct Property {
     ValueKind kind = ValueKind::Bytes;
     std::string kind_reason;        // why this kind was chosen
     std::vector<std::string> lines; // decoded display lines
+    std::vector<Ref> refs;          // resolvable node references
 };
 
 // One device-tree node.  Nodes are stored in a vector and refer to each other
@@ -36,11 +44,13 @@ struct Node {
     std::vector<int> children;   // indices, in dtb order
     std::vector<Property> props; // in dtb order
     bool disabled = false;       // status == "disabled"
+    int phandle = -1;            // this node's phandle value; -1 when absent
 };
 
 struct Tree {
-    std::vector<Node> nodes; // arena; nodes[0] is always the root
-    std::string source;      // file path or "<stdin>"
+    std::vector<Node> nodes;                       // arena; nodes[0] is always the root
+    std::unordered_map<uint32_t, int> phandle_map; // phandle value -> node index
+    std::string source;                            // file path or "<stdin>"
     size_t total_props = 0;
 };
 

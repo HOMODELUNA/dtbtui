@@ -1,6 +1,7 @@
 #include "doctest.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -46,6 +47,38 @@ dtb::Property property(std::string name, std::vector<uint8_t> raw) {
     prop.name = std::move(name);
     prop.raw = std::move(raw);
     return prop;
+}
+
+std::vector<uint8_t> cell(uint32_t value) {
+    return {
+        static_cast<uint8_t>(value >> 24), static_cast<uint8_t>(value >> 16),
+        static_cast<uint8_t>(value >> 8), static_cast<uint8_t>(value)
+    };
+}
+
+std::vector<uint8_t> cells(std::initializer_list<uint32_t> values) {
+    std::vector<uint8_t> raw;
+    for (uint32_t value : values) {
+        const std::vector<uint8_t> one = cell(value);
+        raw.insert(raw.end(), one.begin(), one.end());
+    }
+    return raw;
+}
+
+dtb::Node node_at(std::string path) {
+    dtb::Node node;
+    const size_t slash = path.find_last_of('/');
+    node.name = slash == std::string::npos ? path : path.substr(slash + 1);
+    node.path = std::move(path);
+    return node;
+}
+
+dtb::Tree tree_with_nodes(std::vector<dtb::Node> nodes) {
+    dtb::Tree tree;
+    tree.nodes = std::move(nodes);
+    for (const dtb::Node& node : tree.nodes)
+        tree.total_props += node.props.size();
+    return tree;
 }
 
 } // namespace
@@ -141,4 +174,97 @@ TEST_CASE("decode: hex dump wraps after sixteen bytes") {
     CHECK(prop.lines[0].find("0f") != std::string::npos);
     CHECK(prop.lines[0].find("10") == std::string::npos);
     CHECK(prop.lines[1].find("10") != std::string::npos);
+}
+TEST_CASE("decode: 4-byte aligned value is Cells with big-endian u32") {
+    dtb::Tree tree = tree_with({property("clocks", cell(0x0102))});
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[0].props[0];
+    CHECK(prop.kind == dtb::ValueKind::Cells);
+    REQUIRE(prop.lines.size() == 1);
+    CHECK(prop.lines[0].find("0x00000102 (258)") != std::string::npos);
+}
+
+TEST_CASE("decode: Cells format wraps after eight units") {
+    dtb::Tree tree = tree_with({property("clocks", cells({1, 2, 3, 4, 5, 6, 7, 8, 9}))});
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[0].props[0];
+    CHECK(prop.kind == dtb::ValueKind::Cells);
+    REQUIRE(prop.lines.size() == 2);
+    CHECK(prop.lines[0].find("0x00000008 (8)") != std::string::npos);
+    CHECK(prop.lines[0].find("0x00000009 (9)") == std::string::npos);
+    CHECK(prop.lines[1].find("0x00000009 (9)") != std::string::npos);
+}
+
+TEST_CASE("decode: forward phandle reference resolves to a later node") {
+    dtb::Tree tree
+        = tree_with_nodes({node_at("/"), node_at("/soc/uart@ff0000"), node_at("/soc/gic@3000000")});
+    tree.nodes[1].props.push_back(property("interrupt-parent", cell(2)));
+    tree.nodes[2].phandle = 2;
+    tree.phandle_map.emplace(2, 2);
+    tree.total_props = 1;
+
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[1].props[0];
+    CHECK(prop.kind == dtb::ValueKind::Cells);
+    REQUIRE(prop.refs.size() == 1);
+    CHECK(prop.refs[0].cell_index == 0);
+    CHECK(prop.refs[0].node == 2);
+    REQUIRE(prop.lines.size() == 1);
+    CHECK(prop.lines[0].find("0x00000002 (2)") != std::string::npos);
+    CHECK(prop.lines[0].find("→ /soc/gic@3000000") != std::string::npos);
+}
+
+TEST_CASE("decode: unresolved phandle keeps a marker and node == -1") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/soc/uart@ff0000")});
+    tree.nodes[1].props.push_back(property("interrupt-parent", cell(0x2a)));
+    tree.total_props = 1;
+
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[1].props[0];
+    REQUIRE(prop.refs.size() == 1);
+    CHECK(prop.refs[0].node == -1);
+    REQUIRE(prop.lines.size() == 1);
+    CHECK(prop.lines[0].find("<未解析 0x0000002a>") != std::string::npos);
+}
+
+TEST_CASE("decode: reg and clocks are never treated as references") {
+    dtb::Tree tree
+        = tree_with_nodes({node_at("/"), node_at("/soc/gic@3000000"), node_at("/soc/uart@ff0000")});
+    tree.phandle_map.emplace(5, 1);
+    tree.nodes[2].props.push_back(property("reg", cell(5)));
+    tree.nodes[2].props.push_back(property("clocks", cell(5)));
+    tree.nodes[2].props.push_back(property("gpio-handle", cell(5)));
+    tree.total_props = 3;
+
+    dtb::decode(tree);
+
+    CHECK(tree.nodes[2].props[0].kind == dtb::ValueKind::Cells);
+    CHECK(tree.nodes[2].props[0].refs.empty());
+    CHECK(tree.nodes[2].props[1].refs.empty());
+
+    const dtb::Property& suffix = tree.nodes[2].props[2];
+    REQUIRE(suffix.refs.size() == 1);
+    CHECK(suffix.refs[0].node == 1);
+    CHECK(suffix.lines[0].find("→ /soc/gic@3000000") != std::string::npos);
+}
+
+TEST_CASE("decode: duplicate phandle is noted in kind_reason") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/a"), node_at("/b")});
+    tree.nodes[1].props.push_back(property("phandle", cell(7)));
+    tree.nodes[2].props.push_back(property("phandle", cell(7)));
+    tree.phandle_map.emplace(7, 1);
+    tree.total_props = 2;
+
+    dtb::decode(tree);
+
+    const dtb::Property& first = tree.nodes[1].props[0];
+    const dtb::Property& duplicate = tree.nodes[2].props[0];
+    CHECK(first.kind_reason.find("重复") == std::string::npos);
+    CHECK(duplicate.kind_reason.find("重复") != std::string::npos);
+    REQUIRE(duplicate.refs.size() == 1);
+    CHECK(duplicate.refs[0].node == 1);
 }
