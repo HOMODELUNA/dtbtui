@@ -8,8 +8,10 @@
 
 namespace ui {
 
-// All UI state for the tree panel.  Nodes are referenced by arena index; the
-// visible list is a cached pre-order walk over the expanded nodes.
+enum class Focus { Tree, Props };
+
+// All UI state for the tree and property panels.  Nodes are referenced by arena
+// index; the visible list is a cached pre-order walk over the expanded nodes.
 class State {
 public:
     explicit State(const dtb::Tree& tree)
@@ -33,6 +35,50 @@ public:
     }
 
     const dtb::Node& current_node() const { return tree_.nodes[current_node_index()]; }
+    const std::vector<dtb::Property>& current_props() const { return current_node().props; }
+
+    Focus focus() const { return focus_; }
+    void toggle_focus() { focus_ = focus_ == Focus::Tree ? Focus::Props : Focus::Tree; }
+
+    int props_cursor() const { return props_cursor_; }
+    int props_scroll() const { return props_scroll_; }
+    int props_window_height() const { return props_window_height_; }
+
+    const dtb::Property* selected_property() const {
+        const std::vector<dtb::Property>& props = current_props();
+        if (props.empty() || props_cursor_ >= static_cast<int>(props.size())) return nullptr;
+        return &props[props_cursor_];
+    }
+
+    void set_props_window_height(int height) {
+        props_window_height_ = std::max(1, height);
+        clamp_props_scroll();
+        ensure_props_cursor_visible();
+    }
+
+    void move_props_cursor(int delta) {
+        const int count = static_cast<int>(current_props().size());
+        if (count == 0) return;
+        props_cursor_ = std::clamp(props_cursor_ + delta, 0, count - 1);
+        ensure_props_cursor_visible();
+    }
+
+    void props_first() {
+        props_cursor_ = 0;
+        ensure_props_cursor_visible();
+    }
+
+    void props_last() {
+        const int count = static_cast<int>(current_props().size());
+        if (count == 0) return;
+        props_cursor_ = count - 1;
+        ensure_props_cursor_visible();
+    }
+
+    void props_page(int direction) {
+        const int step = std::max(1, props_window_height_ - 2);
+        move_props_cursor(direction * step);
+    }
 
     void set_window_height(int height) {
         window_height_ = std::max(1, height);
@@ -44,17 +90,20 @@ public:
         if (visible_.empty()) return;
         cursor_ = std::clamp(cursor_ + delta, 0, static_cast<int>(visible_.size()) - 1);
         ensure_cursor_visible();
+        sync_props();
     }
 
     void move_to_first() {
         cursor_ = 0;
         ensure_cursor_visible();
+        sync_props();
     }
 
     void move_to_last() {
         if (visible_.empty()) return;
         cursor_ = static_cast<int>(visible_.size()) - 1;
         ensure_cursor_visible();
+        sync_props();
     }
 
     void page(int direction) {
@@ -82,6 +131,7 @@ public:
         if (index < 0) return;
         cursor_ = index;
         ensure_cursor_visible();
+        sync_props();
     }
 
     void toggle_current() {
@@ -131,6 +181,7 @@ private:
         cursor_ = focus_index(tree_, visible_, focus_node);
         clamp_scroll();
         ensure_cursor_visible();
+        sync_props();
     }
 
     void ensure_cursor_visible() {
@@ -147,12 +198,42 @@ private:
         scroll_ = std::clamp(scroll_, 0, max_scroll);
     }
 
+    void sync_props() {
+        const int node = current_node_index();
+        if (node == props_node_) return;
+        props_node_ = node;
+        props_cursor_ = 0;
+        props_scroll_ = 0;
+    }
+
+    void ensure_props_cursor_visible() {
+        const int count = static_cast<int>(current_props().size());
+        if (count == 0) return;
+        const int margin = std::min(2, std::max(0, (props_window_height_ - 1) / 2));
+        if (props_cursor_ < props_scroll_ + margin) props_scroll_ = props_cursor_ - margin;
+        if (props_cursor_ >= props_scroll_ + props_window_height_ - margin)
+            props_scroll_ = props_cursor_ - props_window_height_ + margin + 1;
+        clamp_props_scroll();
+    }
+
+    void clamp_props_scroll() {
+        const int count = static_cast<int>(current_props().size());
+        const int max_scroll = std::max(0, count - props_window_height_);
+        props_scroll_ = std::clamp(props_scroll_, 0, max_scroll);
+    }
+
     const dtb::Tree& tree_;
     std::unordered_set<int> expanded_;
     std::vector<int> visible_;
     int cursor_ = 0;
     int scroll_ = 0;
     int window_height_ = 1;
+
+    Focus focus_ = Focus::Tree;
+    int props_node_ = -1;
+    int props_cursor_ = 0;
+    int props_scroll_ = 0;
+    int props_window_height_ = 1;
 };
 
 } // namespace ui

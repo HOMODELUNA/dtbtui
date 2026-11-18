@@ -9,6 +9,12 @@
 
 namespace {
 
+dtb::Property prop(std::string name) {
+    dtb::Property value;
+    value.name = std::move(name);
+    return value;
+}
+
 dtb::Node node(
     std::string name, std::string path, int parent, int depth, std::vector<int> children = {}
 ) {
@@ -26,7 +32,11 @@ dtb::Node node(
 dtb::Tree sample_tree() {
     dtb::Tree tree;
     tree.nodes.push_back(node("/", "/", -1, 0, {1, 4}));
+    for (int i = 0; i < 5; ++i)
+        tree.nodes[0].props.push_back(prop("root-" + std::to_string(i)));
     tree.nodes.push_back(node("a", "/a", 0, 1, {2, 3}));
+    tree.nodes[1].props.push_back(prop("a-0"));
+    tree.nodes[1].props.push_back(prop("a-1"));
     tree.nodes.push_back(node("a1", "/a/a1", 1, 2));
     tree.nodes.push_back(node("a2", "/a/a2", 1, 2));
     tree.nodes.push_back(node("b", "/b", 0, 1));
@@ -158,4 +168,46 @@ TEST_CASE("state: cursor leaving the window keeps two rows of context") {
     state.move_cursor(4);
     CHECK(state.current_node().path == "/child-3");
     CHECK(state.scroll() == 2);
+}
+
+TEST_CASE("state: focus toggles between tree and properties") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+
+    CHECK(state.focus() == ui::Focus::Tree);
+    state.toggle_focus();
+    CHECK(state.focus() == ui::Focus::Props);
+    state.toggle_focus();
+    CHECK(state.focus() == ui::Focus::Tree);
+}
+
+TEST_CASE("state: property cursor is clamped and follows its window") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+
+    CHECK(state.props_cursor() == 0);
+    CHECK(state.selected_property()->name == "root-0");
+
+    state.move_props_cursor(-1);
+    CHECK(state.props_cursor() == 0);
+    state.move_props_cursor(100);
+    CHECK(state.props_cursor() == 4);
+    CHECK(state.selected_property()->name == "root-4");
+
+    state.set_props_window_height(3);
+    CHECK(state.props_scroll() == 2);
+    state.props_first();
+    CHECK(state.props_scroll() == 0);
+}
+
+TEST_CASE("state: moving the tree cursor resets the property cursor") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+
+    state.move_props_cursor(3);
+    CHECK(state.props_cursor() == 3);
+
+    state.move_cursor(1); // /a
+    CHECK(state.props_cursor() == 0);
+    CHECK(state.selected_property()->name == "a-0");
 }

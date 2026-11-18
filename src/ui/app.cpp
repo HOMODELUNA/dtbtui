@@ -11,6 +11,7 @@
 #include <ftxui/dom/elements.hpp>
 
 #include "dtb/model.hpp"
+#include "ui/props_view.hpp"
 #include "ui/state.hpp"
 #include "ui/tree_view.hpp"
 
@@ -36,14 +37,33 @@ int run(const dtb::Tree& tree) {
                                      ))
                                    | ftxui::bold;
 
-        const ftxui::Element tree_panel
-            = ftxui::window(ftxui::text("设备树"), tree_pane(tree, state))
-            | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, left_width);
-        const ftxui::Element placeholder
-            = ftxui::window(ftxui::text("属性"), ftxui::text("")) | ftxui::flex;
-        const ftxui::Element body = ftxui::hbox({tree_panel, placeholder}) | ftxui::flex;
+        const bool tree_focused = state.focus() == Focus::Tree;
+        const bool props_focused = state.focus() == Focus::Props;
 
-        const ftxui::Element status = ftxui::text(state.current_node().path) | ftxui::dim;
+        ftxui::Element tree_title = ftxui::text("设备树");
+        ftxui::Element props_title = ftxui::text("属性");
+        if (tree_focused) tree_title = tree_title | ftxui::bold;
+        if (props_focused) props_title = props_title | ftxui::bold;
+
+        const ftxui::Element tree_panel
+            = ftxui::window(
+                  tree_title, tree_pane(tree, state), tree_focused ? ftxui::HEAVY : ftxui::ROUNDED
+              )
+            | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, left_width);
+        const ftxui::Element props_panel
+            = ftxui::window(
+                  props_title, props_pane(state), props_focused ? ftxui::HEAVY : ftxui::ROUNDED
+              )
+            | ftxui::flex;
+        const ftxui::Element detail_panel
+            = ftxui::window(ftxui::text("详情"), ftxui::text("")) | ftxui::flex;
+        const ftxui::Element right = ftxui::vbox({props_panel, detail_panel}) | ftxui::flex;
+        const ftxui::Element body = ftxui::hbox({tree_panel, right}) | ftxui::flex;
+
+        const std::string focus_name = tree_focused ? "设备树" : "属性";
+        const ftxui::Element status
+            = ftxui::text(fmt::format("焦点: {} | {}", focus_name, state.current_node().path))
+            | ftxui::dim;
         return ftxui::vbox({title, ftxui::separator(), body, ftxui::separator(), status})
              | ftxui::flex;
     });
@@ -53,40 +73,64 @@ int run(const dtb::Tree& tree) {
             app.Exit();
             return true;
         }
+        if (event == ftxui::Event::Tab || event == ftxui::Event::TabReverse) {
+            state.toggle_focus();
+            return true;
+        }
+
+        const bool tree_focused = state.focus() == Focus::Tree;
         if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {
-            state.move_cursor(1);
+            if (tree_focused)
+                state.move_cursor(1);
+            else
+                state.move_props_cursor(1);
             return true;
         }
         if (event == ftxui::Event::Character('k') || event == ftxui::Event::ArrowUp) {
-            state.move_cursor(-1);
+            if (tree_focused)
+                state.move_cursor(-1);
+            else
+                state.move_props_cursor(-1);
             return true;
         }
         if (event == ftxui::Event::Character('l') || event == ftxui::Event::ArrowRight) {
-            state.expand_current();
+            if (tree_focused) state.expand_current();
             return true;
         }
         if (event == ftxui::Event::Character('h') || event == ftxui::Event::ArrowLeft) {
-            state.collapse_current();
+            if (tree_focused) state.collapse_current();
             return true;
         }
         if (event == ftxui::Event::Character(' ')) {
-            state.toggle_current();
+            if (tree_focused) state.toggle_current();
             return true;
         }
         if (event == ftxui::Event::Character('g')) {
-            state.move_to_first();
+            if (tree_focused)
+                state.move_to_first();
+            else
+                state.props_first();
             return true;
         }
         if (event == ftxui::Event::Character('G')) {
-            state.move_to_last();
+            if (tree_focused)
+                state.move_to_last();
+            else
+                state.props_last();
             return true;
         }
         if (event == ftxui::Event::CtrlD || event == ftxui::Event::PageDown) {
-            state.page(1);
+            if (tree_focused)
+                state.page(1);
+            else
+                state.props_page(1);
             return true;
         }
         if (event == ftxui::Event::CtrlU || event == ftxui::Event::PageUp) {
-            state.page(-1);
+            if (tree_focused)
+                state.page(-1);
+            else
+                state.props_page(-1);
             return true;
         }
         return false;

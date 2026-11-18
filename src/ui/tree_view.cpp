@@ -14,25 +14,10 @@
 
 #include "dtb/model.hpp"
 #include "ui/state.hpp"
+#include "ui/text_util.hpp"
 
 namespace ui {
 namespace {
-
-std::string fit_line(std::string line, int width) {
-    if (width <= 0) return {};
-    if (ftxui::string_width(line) <= width) return line;
-
-    std::string fitted;
-    int used = 0;
-    for (const std::string& glyph : ftxui::Utf8ToGlyphs(line)) {
-        const int glyph_width = ftxui::string_width(glyph);
-        if (used + glyph_width > width - 1) break;
-        fitted += glyph;
-        used += glyph_width;
-    }
-    fitted += "…";
-    return fitted;
-}
 
 class Pane : public ftxui::Node {
 public:
