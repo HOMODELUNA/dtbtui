@@ -7,7 +7,12 @@
 
 ## 操作
 
-编译: `xmake b`
+- 编译: `xmake b`
+- 测试: `xmake test -v` 或 `xmake b test && xmake r test`
+
+## 约定
+
+- 源文件后缀为 cpp, 头文件后缀为 hpp
 
 ## Note
 

@@ -4,6 +4,7 @@ add_requires("ftxui")
 add_requires("fmt 12.2.1")
 add_requires("argparse v3.2")
 add_requires("doctest v2.5.3")
+add_includedirs("include")
 
 package("libfdt")
     -- set_sourcedir("~/ssd/src/dtc")
@@ -19,13 +20,27 @@ package_end()
 
 add_requires("libfdt c954f9dd835764ec69d3d9afb467c4541b47b66d")
 
-target("dtbtui")
-    set_kind("binary")
+target("dtbtui-objs")
+    set_kind("phony")
+    set_default(false)
     add_files("src/*.cpp")
-    add_packages("ftxui")
-    add_packages("libfdt")
-    add_packages("fmt")
+    remove_files("src/main.cpp")
+    add_packages("ftxui", "libfdt", "fmt", {public=true})
+
+
+target("dtbtui")
+    set_default(true)
+    set_kind("binary")
+    add_deps("dtbtui-objs")
+    add_files("src/main.cpp")
     add_packages("argparse")
+
+target("test")
+    set_default(false)
+    add_deps("dtbtui-objs")
+    add_packages("doctest")
+    add_files("tests/**.cpp")
+    add_tests("default")
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io
