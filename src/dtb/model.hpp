@@ -7,11 +7,23 @@
 
 namespace dtb {
 
+enum class ValueKind {
+    Empty,      // len == 0
+    Bytes,      // fallback: hex dump
+    Cells,      // big-endian u32 sequence
+    Reg,        // split by the parent's #address-cells/#size-cells
+    String,     // one NUL-terminated string
+    StringList, // several NUL-terminated strings
+};
+
 // One property as it appears in the dtb.  `raw` holds the exact value bytes
-// (big-endian, as stored in the blob); decoding is done later.
+// (big-endian, as stored in the blob); `lines` holds the decoded display.
 struct Property {
     std::string name;
     std::vector<uint8_t> raw;
+    ValueKind kind = ValueKind::Bytes;
+    std::string kind_reason;        // why this kind was chosen
+    std::vector<std::string> lines; // decoded display lines
 };
 
 // One device-tree node.  Nodes are stored in a vector and refer to each other

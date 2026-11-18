@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "dtb/decode.hpp"
 #include "dtb/loader.hpp"
 #include "dtb/model.hpp"
 
@@ -31,8 +32,16 @@ std::vector<uint8_t> read_stream(std::istream& in, bool& ok) {
     return data;
 }
 
-char hex_digit(uint8_t value) {
-    return "0123456789abcdef"[value & 0x0f];
+void dump_property(const dtb::Property& prop, const std::string& indent, std::ostream& out) {
+    out << indent << prop.name << " =";
+    if (!prop.lines.empty()) out << ' ' << prop.lines.front();
+    out << '\n';
+
+    const std::string continuation(indent.size() + prop.name.size() + 3, ' ');
+    for (size_t i = 1; i < prop.lines.size(); ++i)
+        out << continuation << prop.lines[i] << '\n';
+
+    out << indent << "  # " << dtb::kind_name(prop.kind) << ": " << prop.kind_reason << '\n';
 }
 
 void dump_tree(const dtb::Tree& tree, std::ostream& out) {
@@ -41,12 +50,8 @@ void dump_tree(const dtb::Tree& tree, std::ostream& out) {
         out << indent << node.path << " (depth " << node.depth << ")\n";
 
         const std::string prop_indent(node.depth * 2 + 2, ' ');
-        for (const dtb::Property& prop : node.props) {
-            out << prop_indent << prop.name << " =";
-            for (uint8_t byte : prop.raw)
-                out << ' ' << hex_digit(byte >> 4) << hex_digit(byte);
-            out << '\n';
-        }
+        for (const dtb::Property& prop : node.props)
+            dump_property(prop, prop_indent, out);
     }
     out << "\n# nodes: " << tree.nodes.size() << ", properties: " << tree.total_props << '\n';
 }
@@ -102,6 +107,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    dump_tree(*result.tree, std::cout);
+    dtb::Tree tree = std::move(*result.tree);
+    dtb::decode(tree);
+    dump_tree(tree, std::cout);
     return 0;
 }
