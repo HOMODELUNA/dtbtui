@@ -132,6 +132,108 @@ void note_duplicate_phandle(Property& prop, size_t node_index, const Tree& tree)
     }
 }
 
+bool cells_supported(uint32_t count) {
+    return count >= 1 && count <= 2;
+}
+
+uint32_t read_cell_count(
+    const Tree& tree, int node_index, std::string_view name, uint32_t fallback
+) {
+    if (node_index < 0) return fallback;
+    for (const Property& prop : tree.nodes[node_index].props) {
+        if (prop.name != name) continue;
+        if (prop.raw.size() < sizeof(uint32_t)) return fallback;
+        return read_cell(prop.raw, 0);
+    }
+    return fallback;
+}
+
+uint64_t read_wide_cells(const std::vector<uint8_t>& raw, size_t offset, uint32_t count) {
+    uint64_t value = 0;
+    for (uint32_t i = 0; i < count; ++i)
+        value = (value << 32) | read_cell(raw, offset + i);
+    return value;
+}
+
+void decode_cells_or_bytes(Property& prop, std::string reason) {
+    if (prop.raw.size() % sizeof(uint32_t) == 0) { decode_cells(prop, std::move(reason)); }
+    else {
+        decode_bytes(prop);
+        prop.kind_reason = std::move(reason);
+    }
+}
+
+void decode_reg(Property& prop, uint32_t address_cells, uint32_t size_cells) {
+    const size_t entry_cells = static_cast<size_t>(address_cells) + size_cells;
+    const size_t entry_bytes = entry_cells * sizeof(uint32_t);
+    if (!cells_supported(address_cells) || !cells_supported(size_cells) || entry_bytes == 0
+        || prop.raw.size() % entry_bytes != 0) {
+        decode_cells_or_bytes(
+            prop, fmt::format(
+                      "{} 长度 {} 不是 (#address-cells={} + #size-cells={})*4 的整数倍，"
+                      "退化为 u32 单元",
+                      prop.name, prop.raw.size(), address_cells, size_cells
+                  )
+        );
+        return;
+    }
+
+    const int address_width = static_cast<int>(address_cells) * 8 + 2;
+    prop.kind = ValueKind::Reg;
+    prop.kind_reason = fmt::format(
+        "{} → 父节点 #address-cells={}, #size-cells={}", prop.name, address_cells, size_cells
+    );
+    prop.lines.clear();
+    for (size_t offset = 0; offset < prop.raw.size(); offset += entry_bytes) {
+        const uint64_t address = read_wide_cells(prop.raw, offset, address_cells);
+        const uint64_t length = read_wide_cells(prop.raw, offset + address_cells, size_cells);
+        prop.lines.push_back(
+            fmt::format("{:#0{}x}  0x{:x}  ({} B)", address, address_width, length, length)
+        );
+    }
+}
+
+void decode_ranges(
+    Property& prop, uint32_t child_address_cells, uint32_t parent_address_cells, uint32_t size_cells
+) {
+    const size_t entry_cells
+        = static_cast<size_t>(child_address_cells) + parent_address_cells + size_cells;
+    const size_t entry_bytes = entry_cells * sizeof(uint32_t);
+    if (!cells_supported(child_address_cells) || !cells_supported(parent_address_cells)
+        || !cells_supported(size_cells) || entry_bytes == 0 || prop.raw.size() % entry_bytes != 0) {
+        decode_cells_or_bytes(
+            prop,
+            fmt::format(
+                "{} 长度 {} 不是 (本节点 #address-cells={} + 父节点 "
+                "#address-cells={} + #size-cells={})*4 的整数倍，退化为 u32 单元",
+                prop.name, prop.raw.size(), child_address_cells, parent_address_cells, size_cells
+            )
+        );
+        return;
+    }
+
+    const int child_width = static_cast<int>(child_address_cells) * 8 + 2;
+    const int parent_width = static_cast<int>(parent_address_cells) * 8 + 2;
+    prop.kind = ValueKind::Reg;
+    prop.kind_reason = fmt::format(
+        "{} → 本节点 #address-cells={}, #size-cells={}, 父节点 #address-cells={}", prop.name,
+        child_address_cells, size_cells, parent_address_cells
+    );
+    prop.lines.clear();
+    for (size_t offset = 0; offset < prop.raw.size(); offset += entry_bytes) {
+        const uint64_t child_address = read_wide_cells(prop.raw, offset, child_address_cells);
+        const uint64_t parent_address
+            = read_wide_cells(prop.raw, offset + child_address_cells, parent_address_cells);
+        const uint64_t length = read_wide_cells(
+            prop.raw, offset + child_address_cells + parent_address_cells, size_cells
+        );
+        prop.lines.push_back(fmt::format(
+            "{:#0{}x}  {:#0{}x}  0x{:x}  ({} B)", child_address, child_width, parent_address,
+            parent_width, length, length
+        ));
+    }
+}
+
 void decode_property(Property& prop, size_t node_index, const Tree& tree) {
     prop.kind = ValueKind::Bytes;
     prop.kind_reason.clear();
@@ -146,6 +248,23 @@ void decode_property(Property& prop, size_t node_index, const Tree& tree) {
 
     if (is_string_list_prop(prop.name)) {
         set_strings(prop, split_strings(prop.raw), fmt::format("{} 在字符串列表白名单", prop.name));
+        return;
+    }
+
+    const int parent = tree.nodes[node_index].parent;
+    if (prop.name == "reg") {
+        const uint32_t address_cells = read_cell_count(tree, parent, "#address-cells", 2);
+        const uint32_t size_cells = read_cell_count(tree, parent, "#size-cells", 2);
+        decode_reg(prop, address_cells, size_cells);
+        return;
+    }
+
+    if (prop.name == "ranges" || prop.name == "dma-ranges") {
+        const int current = static_cast<int>(node_index);
+        const uint32_t child_address_cells = read_cell_count(tree, current, "#address-cells", 2);
+        const uint32_t size_cells = read_cell_count(tree, current, "#size-cells", 2);
+        const uint32_t parent_address_cells = read_cell_count(tree, parent, "#address-cells", 2);
+        decode_ranges(prop, child_address_cells, parent_address_cells, size_cells);
         return;
     }
 

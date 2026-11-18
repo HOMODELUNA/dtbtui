@@ -268,3 +268,125 @@ TEST_CASE("decode: duplicate phandle is noted in kind_reason") {
     REQUIRE(duplicate.refs.size() == 1);
     CHECK(duplicate.refs[0].node == 1);
 }
+
+TEST_CASE("decode: reg uses parent (2,1) cells and keeps 64-bit addresses") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/soc")});
+    tree.nodes[1].parent = 0;
+    tree.nodes[1].props.push_back(property("#address-cells", cell(2)));
+    tree.nodes[1].props.push_back(property("#size-cells", cell(1)));
+    tree.nodes.push_back(node_at("/soc/serial@ffe0000"));
+    tree.nodes[2].parent = 1;
+    tree.nodes[2].props.push_back(property("reg", cells({0, 0x0ffe0000, 0x1000})));
+    tree.total_props = 3;
+
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[2].props[0];
+    CHECK(prop.kind == dtb::ValueKind::Reg);
+    REQUIRE(prop.lines.size() == 1);
+    CHECK(prop.lines[0] == "0x000000000ffe0000  0x1000  (4096 B)");
+    CHECK(prop.kind_reason.find("父节点 #address-cells=2") != std::string::npos);
+}
+
+TEST_CASE("decode: reg uses parent (2,2) cells") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/soc")});
+    tree.nodes[1].parent = 0;
+    tree.nodes[1].props.push_back(property("#address-cells", cell(2)));
+    tree.nodes[1].props.push_back(property("#size-cells", cell(2)));
+    tree.nodes.push_back(node_at("/soc/foo@2000"));
+    tree.nodes[2].parent = 1;
+    tree.nodes[2].props.push_back(property("reg", cells({0, 0x2000, 0, 0x400})));
+    tree.total_props = 3;
+
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[2].props[0];
+    CHECK(prop.kind == dtb::ValueKind::Reg);
+    REQUIRE(prop.lines.size() == 1);
+    CHECK(prop.lines[0] == "0x0000000000002000  0x400  (1024 B)");
+}
+
+TEST_CASE("decode: reg uses parent (1,1) cells") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/soc")});
+    tree.nodes[1].parent = 0;
+    tree.nodes[1].props.push_back(property("#address-cells", cell(1)));
+    tree.nodes[1].props.push_back(property("#size-cells", cell(1)));
+    tree.nodes.push_back(node_at("/soc/foo@1000000"));
+    tree.nodes[2].parent = 1;
+    tree.nodes[2].props.push_back(property("reg", cells({0x1000000, 0x400})));
+    tree.total_props = 3;
+
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[2].props[0];
+    CHECK(prop.kind == dtb::ValueKind::Reg);
+    REQUIRE(prop.lines.size() == 1);
+    CHECK(prop.lines[0] == "0x01000000  0x400  (1024 B)");
+}
+
+TEST_CASE("decode: reg falls back to parent cell defaults") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/soc")});
+    tree.nodes[1].parent = 0;
+    tree.nodes.push_back(node_at("/soc/foo@1234"));
+    tree.nodes[2].parent = 1;
+    tree.nodes[2].props.push_back(property("reg", cells({0, 0x1234, 0, 0x100})));
+    tree.total_props = 1;
+
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[2].props[0];
+    CHECK(prop.kind == dtb::ValueKind::Reg);
+    REQUIRE(prop.lines.size() == 1);
+    CHECK(prop.lines[0] == "0x0000000000001234  0x100  (256 B)");
+    CHECK(prop.kind_reason.find("#address-cells=2") != std::string::npos);
+    CHECK(prop.kind_reason.find("#size-cells=2") != std::string::npos);
+}
+
+TEST_CASE("decode: misaligned reg length degrades to u32 cells with a reason") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/soc")});
+    tree.nodes[1].parent = 0;
+    tree.nodes[1].props.push_back(property("#address-cells", cell(2)));
+    tree.nodes[1].props.push_back(property("#size-cells", cell(1)));
+    tree.nodes.push_back(node_at("/soc/broken@0"));
+    tree.nodes[2].parent = 1;
+    tree.nodes[2].props.push_back(property("reg", cells({1, 2, 3, 4})));
+    tree.total_props = 3;
+
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[2].props[0];
+    CHECK(prop.kind == dtb::ValueKind::Cells);
+    CHECK(prop.kind_reason.find("退化为 u32 单元") != std::string::npos);
+    REQUIRE(prop.lines.size() == 1);
+}
+
+TEST_CASE("decode: ranges shows child address, parent address and length") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/soc"), node_at("/soc/bus")});
+    tree.nodes[1].parent = 0;
+    tree.nodes[1].props.push_back(property("#address-cells", cell(1)));
+    tree.nodes[2].parent = 1;
+    tree.nodes[2].props.push_back(property("#address-cells", cell(1)));
+    tree.nodes[2].props.push_back(property("#size-cells", cell(1)));
+    tree.nodes[2].props.push_back(property("ranges", cells({0x0, 0x1000000, 0x400000})));
+    tree.total_props = 3;
+
+    dtb::decode(tree);
+
+    const dtb::Property& prop = tree.nodes[2].props[2];
+    CHECK(prop.kind == dtb::ValueKind::Reg);
+    REQUIRE(prop.lines.size() == 1);
+    CHECK(prop.lines[0] == "0x00000000  0x01000000  0x400000  (4194304 B)");
+    CHECK(prop.kind_reason.find("本节点 #address-cells=1") != std::string::npos);
+    CHECK(prop.kind_reason.find("父节点 #address-cells=1") != std::string::npos);
+}
+
+TEST_CASE("decode: empty ranges is Empty") {
+    dtb::Tree tree = tree_with_nodes({node_at("/"), node_at("/soc")});
+    tree.nodes[1].parent = 0;
+    tree.nodes[1].props.push_back(property("ranges", {}));
+    tree.total_props = 1;
+
+    dtb::decode(tree);
+
+    CHECK(tree.nodes[1].props[0].kind == dtb::ValueKind::Empty);
+}
