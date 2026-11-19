@@ -6,17 +6,19 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
 
+#include "dtb/classify.hpp"
 #include "dtb/model.hpp"
 
 namespace ui {
 
-enum class Focus { Tree, Props };
+enum class Focus { Tree, Types, Props };
 
 // Rows moved by one mouse-wheel notch, per the plan's key table.
 constexpr int kMouseScrollLines = 3;
@@ -76,13 +78,20 @@ inline bool has_resolvable_ref(const dtb::Property& prop) {
     });
 }
 
-// All UI state for the tree and property panels.  Nodes are referenced by arena
-// index; the visible list is a cached pre-order walk over the expanded nodes.
+// One row of the type panel: a device class and how many nodes it contains.
+struct TypeEntry {
+    dtb::DeviceKind kind = dtb::DeviceKind::Other;
+    size_t count = 0;
+};
+
+// All UI state for the tree, type and property panels.  Nodes are referenced
+// by arena index; the visible list is a cached pre-order walk.
 class State {
 public:
     explicit State(const dtb::Tree& tree)
         : tree_(tree) {
         if (!tree_.nodes.empty()) expanded_.insert(0);
+        collect_types();
         rebuild_visible(0);
     }
 
@@ -105,7 +114,13 @@ public:
 
     Focus focus() const { return focus_; }
     void set_focus(Focus focus) { focus_ = focus; }
-    void toggle_focus() { focus_ = focus_ == Focus::Tree ? Focus::Props : Focus::Tree; }
+    void toggle_focus() {
+        switch (focus_) {
+        case Focus::Tree: focus_ = Focus::Types; break;
+        case Focus::Types: focus_ = Focus::Props; break;
+        case Focus::Props: focus_ = Focus::Tree; break;
+        }
+    }
 
     bool help_visible() const { return help_visible_; }
     void toggle_help() { help_visible_ = !help_visible_; }
@@ -152,6 +167,100 @@ public:
         filter_.pop_back();
         if (filter_.empty()) { restore_snapshot(); }
         else { rebuild_visible(current_node_index()); }
+    }
+
+    // --- type panel ----------------------------------------------------------
+    const std::vector<TypeEntry>& types() const { return types_; }
+    int types_cursor() const { return types_cursor_; }
+    int types_scroll() const { return types_scroll_; }
+    int types_window_height() const { return types_window_height_; }
+
+    // A kind is enabled by default; disabling it hides its nodes in the tree.
+    bool type_enabled(dtb::DeviceKind kind) const { return !disabled_types_.contains(kind); }
+    bool is_solo(dtb::DeviceKind kind) const { return solo_ && *solo_ == kind; }
+    std::optional<dtb::DeviceKind> solo() const { return solo_; }
+    size_t disabled_type_count() const { return disabled_types_.size(); }
+
+    // True when the tree is narrowed by the type panel.
+    bool type_filter_active() const { return solo_.has_value() || !disabled_types_.empty(); }
+
+    const TypeEntry* selected_type() const {
+        if (types_cursor_ >= static_cast<int>(types_.size())) return nullptr;
+        return &types_[static_cast<size_t>(types_cursor_)];
+    }
+
+    void set_types_box(PaneBox box) {
+        types_box_ = box;
+        types_window_height_ = std::max(1, box.height());
+        clamp_types_scroll();
+        ensure_types_cursor_visible();
+    }
+
+    void move_types_cursor(int delta) {
+        const int count = static_cast<int>(types_.size());
+        if (count == 0) return;
+        types_cursor_ = std::clamp(types_cursor_ + delta, 0, count - 1);
+        ensure_types_cursor_visible();
+    }
+
+    void types_first() {
+        types_cursor_ = 0;
+        ensure_types_cursor_visible();
+    }
+
+    void types_last() {
+        if (types_.empty()) return;
+        types_cursor_ = static_cast<int>(types_.size()) - 1;
+        ensure_types_cursor_visible();
+    }
+
+    void types_page(int direction) {
+        const int step = std::max(1, types_window_height_ - 2);
+        move_types_cursor(direction * step);
+    }
+
+    // Space: enable/disable the selected type.  Disabling the soloed kind leaves
+    // the solo view, so the panel always has an obvious way out.
+    void toggle_type() {
+        const TypeEntry* entry = selected_type();
+        if (entry == nullptr) return;
+        const dtb::DeviceKind kind = entry->kind;
+        if (is_solo(kind))
+            solo_.reset();
+        else if (disabled_types_.contains(kind))
+            disabled_types_.erase(kind);
+        else
+            disabled_types_.insert(kind);
+        rebuild_visible(current_node_index());
+    }
+
+    // Enter: show only the selected type, or leave that view.  Entering the
+    // view lands on the first node of that type instead of on an ancestor.
+    void toggle_solo() {
+        const TypeEntry* entry = selected_type();
+        if (entry == nullptr) return;
+        if (is_solo(entry->kind)) {
+            solo_.reset();
+            rebuild_visible(current_node_index());
+            return;
+        }
+        solo_ = entry->kind;
+        rebuild_visible(current_node_index());
+        for (size_t i = 0; i < visible_.size(); ++i) {
+            if (tree_.nodes[visible_[i]].kind != *solo_) continue;
+            cursor_ = static_cast<int>(i);
+            ensure_cursor_visible();
+            sync_props();
+            break;
+        }
+    }
+
+    // Esc: leave the solo view.  Returns false when no solo was active.
+    bool cancel_solo() {
+        if (!solo_) return false;
+        solo_.reset();
+        rebuild_visible(current_node_index());
+        return true;
     }
 
     // --- phandle navigation --------------------------------------------------
@@ -371,14 +480,48 @@ public:
         return true;
     }
 
+    int types_row_at(int x, int y) const {
+        if (!types_box_.contains(x, y)) return -1;
+        const int row = types_scroll_ + (y - types_box_.y_min);
+        if (row < 0 || row >= static_cast<int>(types_.size())) return -1;
+        return row;
+    }
+
+    // True when the coordinate falls on the `[x]` box in front of a type row.
+    bool types_toggle_at(int x, int y) const {
+        const int row = types_row_at(x, y);
+        if (row < 0) return false;
+        const int column = x - types_box_.x_min;
+        return column >= 0 && column <= 2;
+    }
+
+    bool select_types_row(int row) {
+        if (row < 0 || row >= static_cast<int>(types_.size())) return false;
+        types_cursor_ = row;
+        ensure_types_cursor_visible();
+        return true;
+    }
+
+    // Toggle the row's kind without moving the type cursor.
+    bool toggle_types_row(int row) {
+        const int keep = types_cursor_;
+        if (!select_types_row(row)) return false;
+        toggle_type();
+        types_cursor_ = keep;
+        ensure_types_cursor_visible();
+        return true;
+    }
+
     // Wheel: scroll the pane under the pointer, keeping the cursor inside it.
     void wheel(int x, int y, int direction) {
         if (tree_box_.contains(x, y)) { scroll_tree(direction * kMouseScrollLines); }
+        else if (types_box_.contains(x, y)) { scroll_types(direction * kMouseScrollLines); }
         else if (props_box_.contains(x, y)) { scroll_props(direction * kMouseScrollLines); }
     }
 
     // Left click: focus the pane under the pointer and select the row.
-    // Clicking the fold glyph of a tree row only toggles the fold.
+    // Clicking the fold glyph of a tree row only toggles the fold; clicking the
+    // `[x]` box of a type row only toggles that type.
     void click(int x, int y) {
         if (tree_box_.contains(x, y)) {
             focus_ = Focus::Tree;
@@ -386,6 +529,14 @@ public:
             if (row < 0) return;
             if (tree_toggle_at(x, y)) { toggle_tree_row(row); }
             else { select_tree_row(row); }
+            return;
+        }
+        if (types_box_.contains(x, y)) {
+            focus_ = Focus::Types;
+            const int row = types_row_at(x, y);
+            if (row < 0) return;
+            if (types_toggle_at(x, y)) { toggle_types_row(row); }
+            else { select_types_row(row); }
             return;
         }
         if (props_box_.contains(x, y)) {
@@ -405,6 +556,12 @@ public:
         props_scroll_ += lines;
         clamp_props_scroll();
         keep_props_cursor_in_window();
+    }
+
+    void scroll_types(int lines) {
+        types_scroll_ += lines;
+        clamp_types_scroll();
+        keep_types_cursor_in_window();
     }
 
 private:
@@ -454,6 +611,27 @@ private:
         return mask;
     }
 
+    void collect_types() {
+        std::unordered_map<dtb::DeviceKind, size_t> counts;
+        for (const dtb::Node& node : tree_.nodes) {
+            if (node.kind == dtb::DeviceKind::Structural) continue;
+            ++counts[node.kind];
+        }
+        for (const dtb::DeviceKind kind : dtb::kSelectableKinds) {
+            const auto it = counts.find(kind);
+            if (it != counts.end()) types_.push_back(TypeEntry{kind, it->second});
+        }
+    }
+
+    // Whether the node may be shown under the current type filter.  A solo view
+    // keeps only that kind; masking keeps every kind except the disabled ones.
+    // Structure (containers, pin groups, ...) is never hidden by masking.
+    bool node_passes(const dtb::Node& node) const {
+        if (solo_) return node.kind == *solo_;
+        if (node.kind == dtb::DeviceKind::Structural) return true;
+        return !disabled_types_.contains(node.kind);
+    }
+
     void rebuild_visible(int focus_node) {
         visible_.clear();
         match_count_ = 0;
@@ -463,26 +641,42 @@ private:
             return;
         }
 
-        const bool filtering = is_filtering();
-        const std::string lowered = filtering ? to_lower(filter_) : std::string();
-        const std::vector<char> mask = filtering ? filter_mask(lowered) : std::vector<char>();
+        const bool searching = is_filtering();
+        // The search view and the solo view are "where are the matches" views:
+        // they ignore the fold state so every match stays reachable.
+        const bool flat = searching || solo_.has_value();
+        const std::string lowered = searching ? to_lower(filter_) : std::string();
+
+        std::vector<char> mask;
+        if (flat) {
+            mask.assign(tree_.nodes.size(), 0);
+            for (size_t i = 0; i < tree_.nodes.size(); ++i) {
+                const dtb::Node& node = tree_.nodes[i];
+                const bool search_hit = searching && node_matches(node, lowered);
+                if (search_hit) ++match_count_;
+                if (!node_passes(node)) continue;
+                if (searching && !search_hit) continue;
+                for (int ancestor = static_cast<int>(i); ancestor >= 0;
+                     ancestor = tree_.nodes[ancestor].parent) {
+                    mask[static_cast<size_t>(ancestor)] = 1;
+                }
+            }
+        }
 
         std::vector<int> stack{0};
         while (!stack.empty()) {
             const int node = stack.back();
             stack.pop_back();
-            const bool included = !filtering || mask[static_cast<size_t>(node)] != 0;
-            if (!included) continue;
-
-            visible_.push_back(node);
-            if (filtering) {
-                // A filtered node counts as a match when it is not merely an
-                // ancestor of some deeper match.
-                if (node_matches(tree_.nodes[node], lowered)) ++match_count_;
+            const bool keep
+                = flat ? mask[static_cast<size_t>(node)] != 0 : node_passes(tree_.nodes[node]);
+            if (!keep) {
+                if (flat) continue; // a flat view skips whole subtrees, not just rows
             }
+            else { visible_.push_back(node); }
 
-            // While filtering the fold state is ignored: every match stays visible.
-            if (!filtering && !expanded_.contains(node)) continue;
+            // A flat view is always fully open; otherwise the fold state decides
+            // whether the children are reachable.
+            if (!flat && !expanded_.contains(node)) continue;
             const std::vector<int>& children = tree_.nodes[node].children;
             for (auto it = children.rbegin(); it != children.rend(); ++it)
                 stack.push_back(*it);
@@ -570,6 +764,32 @@ private:
         props_scroll_ = std::clamp(props_scroll_, 0, max_scroll);
     }
 
+    void ensure_types_cursor_visible() {
+        const int count = static_cast<int>(types_.size());
+        if (count == 0) return;
+        const int margin = std::min(1, std::max(0, (types_window_height_ - 1) / 2));
+        if (types_cursor_ < types_scroll_ + margin) types_scroll_ = types_cursor_ - margin;
+        if (types_cursor_ >= types_scroll_ + types_window_height_ - margin)
+            types_scroll_ = types_cursor_ - types_window_height_ + margin + 1;
+        clamp_types_scroll();
+    }
+
+    void keep_types_cursor_in_window() {
+        const int count = static_cast<int>(types_.size());
+        if (count == 0) return;
+        types_cursor_ = std::clamp(types_cursor_, 0, count - 1);
+        if (types_cursor_ < types_scroll_) types_cursor_ = types_scroll_;
+        if (types_cursor_ >= types_scroll_ + types_window_height_)
+            types_cursor_ = types_scroll_ + types_window_height_ - 1;
+        types_cursor_ = std::clamp(types_cursor_, 0, count - 1);
+    }
+
+    void clamp_types_scroll() {
+        const int count = static_cast<int>(types_.size());
+        const int max_scroll = std::max(0, count - types_window_height_);
+        types_scroll_ = std::clamp(types_scroll_, 0, max_scroll);
+    }
+
     const dtb::Tree& tree_;
     std::unordered_set<int> expanded_;
     std::vector<int> visible_;
@@ -587,6 +807,14 @@ private:
 
     PaneBox tree_box_;
     PaneBox props_box_;
+    PaneBox types_box_;
+
+    std::vector<TypeEntry> types_;
+    std::unordered_set<dtb::DeviceKind> disabled_types_;
+    std::optional<dtb::DeviceKind> solo_;
+    int types_cursor_ = 0;
+    int types_scroll_ = 0;
+    int types_window_height_ = 1;
 
     Focus focus_ = Focus::Tree;
     int props_node_ = -1;

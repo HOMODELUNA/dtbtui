@@ -25,8 +25,8 @@ constexpr std::array<Binding, 6> kGlobal = {{
     {"q / Ctrl-C", "退出（帮助/搜索打开时先关闭浮层）"},
     {"?", "帮助浮层开/关"},
     {"/", "打开搜索输入行，增量过滤"},
-    {"Esc", "清空搜索 / 关闭帮助浮层"},
-    {"Tab / Shift-Tab", "在树面板与属性面板之间切换焦点"},
+    {"Esc", "清空搜索 / 取消单独显示 / 关闭帮助浮层"},
+    {"Tab / Shift-Tab", "在设备树、类型、属性三个面板之间切换焦点"},
     {"鼠标滚轮", "滚动 3 行（指针所在面板）"},
 }};
 
@@ -42,20 +42,30 @@ constexpr std::array<Binding, 9> kTree = {{
     {"鼠标左键", "点行选中；点 ▸/▾ 只切换折叠"},
 }};
 
-constexpr std::array<Binding, 8> kProps = {{
+constexpr std::array<Binding, 7> kTypes = {{
+    {"j / ↓", "光标下移"},
+    {"k / ↑", "光标上移"},
+    {"Space", "开启 / 关闭该类型"},
+    {"Enter", "单独显示该类型 / 取消单独显示"},
+    {"g / G", "跳到首个 / 最后一个类型"},
+    {"Ctrl-D / Ctrl-U · PgDn / PgUp", "翻页"},
+    {"鼠标左键", "点 [x] 开关该类型；点行选中"},
+}};
+
+constexpr std::array<Binding, 7> kProps = {{
     {"j / ↓", "光标下移"},
     {"k / ↑", "光标上移"},
     {"Enter", "跳到可解析 phandle 的目标节点"},
     {"Backspace", "沿跳转栈回退上一个节点"},
     {"g / G", "跳到首个 / 最后一个属性"},
     {"Ctrl-D / Ctrl-U · PgDn / PgUp", "翻页"},
-    {"Tab / Shift-Tab", "回到树面板"},
     {"鼠标左键", "点行选中"},
 }};
 
-constexpr std::array<Group, 3> kGroups = {{
+constexpr std::array<Group, 4> kGroups = {{
     {"全局", kGlobal.data(), kGlobal.size()},
     {"设备树", kTree.data(), kTree.size()},
+    {"类型", kTypes.data(), kTypes.size()},
     {"属性", kProps.data(), kProps.size()},
 }};
 

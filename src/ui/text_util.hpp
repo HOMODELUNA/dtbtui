@@ -70,6 +70,45 @@ inline std::string property_summary(const dtb::Property& prop) {
     return summary;
 }
 
+// One colour per device class.  The type panel and the tree use the same
+// mapping, so a coloured type row matches the coloured device rows.
+inline ftxui::Color device_color(dtb::DeviceKind kind) {
+    switch (kind) {
+    case dtb::DeviceKind::Cpu: return ftxui::Color::BlueLight;
+    case dtb::DeviceKind::Bus: return ftxui::Color::GrayLight;
+    case dtb::DeviceKind::Memory: return ftxui::Color::GreenLight;
+    case dtb::DeviceKind::Interrupt: return ftxui::Color::YellowLight;
+    case dtb::DeviceKind::Iommu: return ftxui::Color::MagentaLight;
+    case dtb::DeviceKind::Clock: return ftxui::Color::CyanLight;
+    case dtb::DeviceKind::Power: return ftxui::Color::RedLight;
+    case dtb::DeviceKind::Pinctrl: return ftxui::Color::Green;
+    case dtb::DeviceKind::Storage: return ftxui::Color::Blue;
+    case dtb::DeviceKind::Serial: return ftxui::Color::Cyan;
+    case dtb::DeviceKind::I2c: return ftxui::Color::Magenta;
+    case dtb::DeviceKind::Spi: return ftxui::Color::Yellow;
+    case dtb::DeviceKind::Usb: return ftxui::Color::Red;
+    case dtb::DeviceKind::Network: return ftxui::Color::GreenLight;
+    case dtb::DeviceKind::Wireless: return ftxui::Color::Magenta;
+    case dtb::DeviceKind::Display: return ftxui::Color::Cyan;
+    case dtb::DeviceKind::Panel: return ftxui::Color::YellowLight;
+    case dtb::DeviceKind::Gpu: return ftxui::Color::BlueLight;
+    case dtb::DeviceKind::Video: return ftxui::Color::RedLight;
+    case dtb::DeviceKind::Camera: return ftxui::Color::MagentaLight;
+    case dtb::DeviceKind::Audio: return ftxui::Color::Green;
+    case dtb::DeviceKind::Pwm: return ftxui::Color::Yellow;
+    case dtb::DeviceKind::Adc: return ftxui::Color::Cyan;
+    case dtb::DeviceKind::Thermal: return ftxui::Color::Red;
+    case dtb::DeviceKind::Timer: return ftxui::Color::Blue;
+    case dtb::DeviceKind::Dma: return ftxui::Color::MagentaLight;
+    case dtb::DeviceKind::Crypto: return ftxui::Color::GrayLight;
+    case dtb::DeviceKind::Led: return ftxui::Color::YellowLight;
+    case dtb::DeviceKind::Firmware: return ftxui::Color::GrayDark;
+    case dtb::DeviceKind::Structural: return ftxui::Color::Default;
+    case dtb::DeviceKind::Other: return ftxui::Color::White;
+    }
+    return ftxui::Color::Default;
+}
+
 inline ftxui::Color value_color(const dtb::Property& prop) {
     if (!prop.refs.empty()) return ftxui::Color::Yellow;
     switch (prop.kind) {

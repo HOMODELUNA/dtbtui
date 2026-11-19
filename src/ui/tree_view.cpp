@@ -66,16 +66,23 @@ public:
 
             const int node_index = visible[index];
             const dtb::Node& node = tree_.nodes[node_index];
-            std::string line(static_cast<size_t>(node.depth) * 2, ' ');
+            std::string indent(static_cast<size_t>(node.depth) * 2, ' ');
+            std::string glyph;
             if (node.children.empty())
-                line.append("  ");
+                glyph = "  ";
             else if (state_.is_expanded(node_index))
-                line.append("▾ ");
+                glyph = "▾ ";
             else
-                line.append("▸ ");
-            line += node.name;
+                glyph = "▸ ";
 
-            ftxui::Element element = ftxui::text(fit_line(std::move(line), width));
+            // The name carries the device-type colour, so a row matches its
+            // entry in the type panel.  Structure stays in the default colour.
+            ftxui::Element element = ftxui::hbox({
+                ftxui::text(std::move(indent)),
+                ftxui::text(std::move(glyph)),
+                ftxui::text(fit_line(node.name, width - node.depth * 2 - 2))
+                    | ftxui::color(device_color(node.kind)),
+            });
             if (node.disabled) element = element | ftxui::dim;
             if (index == state_.cursor()) element = element | ftxui::inverted;
             rows.push_back(std::move(element));

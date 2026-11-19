@@ -170,11 +170,13 @@ TEST_CASE("state: cursor leaving the window keeps two rows of context") {
     CHECK(state.scroll() == 2);
 }
 
-TEST_CASE("state: focus toggles between tree and properties") {
+TEST_CASE("state: focus cycles through tree, types and properties") {
     const dtb::Tree tree = sample_tree();
     ui::State state(tree);
 
     CHECK(state.focus() == ui::Focus::Tree);
+    state.toggle_focus();
+    CHECK(state.focus() == ui::Focus::Types);
     state.toggle_focus();
     CHECK(state.focus() == ui::Focus::Props);
     state.toggle_focus();
@@ -210,4 +212,446 @@ TEST_CASE("state: moving the tree cursor resets the property cursor") {
     state.move_cursor(1); // /a
     CHECK(state.props_cursor() == 0);
     CHECK(state.selected_property()->name == "a-0");
+}
+
+namespace {
+
+// Build a big-endian u32 property value.
+std::vector<uint8_t> cells(uint32_t value) {
+    return {
+        static_cast<uint8_t>(value >> 24),
+        static_cast<uint8_t>(value >> 16),
+        static_cast<uint8_t>(value >> 8),
+        static_cast<uint8_t>(value),
+    };
+}
+
+// / (0) -> soc (1) -> serial@5000000 (2) [interrupt-parent -> gic]
+//                   -> gic (3) [phandle = 5]
+//                   -> uart (4)
+dtb::Tree phandle_tree() {
+    dtb::Tree tree;
+    tree.nodes.push_back(node("/", "/", -1, 0, {1}));
+    tree.nodes.push_back(node("soc", "/soc", 0, 1, {2, 3, 4}));
+    tree.nodes.push_back(node("serial@5000000", "/soc/serial@5000000", 1, 2));
+    tree.nodes.push_back(node("gic", "/soc/gic", 1, 2));
+    tree.nodes.push_back(node("uart", "/soc/uart", 1, 2));
+
+    dtb::Property interrupt_parent = prop("interrupt-parent");
+    interrupt_parent.raw = cells(5);
+    interrupt_parent.kind = dtb::ValueKind::Cells;
+    interrupt_parent.refs.push_back(dtb::Ref{0, 3});
+    tree.nodes[2].props.push_back(interrupt_parent);
+
+    dtb::Property phandle = prop("phandle");
+    phandle.raw = cells(5);
+    phandle.kind = dtb::ValueKind::Cells;
+    phandle.refs.push_back(dtb::Ref{0, 3});
+    tree.nodes[3].props.push_back(phandle);
+    return tree;
+}
+
+} // namespace
+
+TEST_CASE("state: search filters to matches and their ancestors") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    CHECK(state.visible().size() == 5);
+
+    state.begin_search();
+    CHECK(state.search_active());
+    for (const char* character = "UART"; *character != '\0'; ++character)
+        state.search_append(*character);
+
+    CHECK(state.is_filtering());
+    CHECK(state.filter() == "UART");
+    // /soc/uart plus the ancestor chain (/ and /soc).
+    const std::vector<int> expected = {0, 1, 4};
+    CHECK(state.visible() == expected);
+    CHECK(state.match_count() == 1);
+    // The cursor keeps its node while it stays visible: /soc came before the filter.
+    CHECK(state.current_node().path == "/soc");
+}
+
+TEST_CASE("state: search matches property names too") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.begin_search();
+    for (const char* character = "interrupt-parent"; *character != '\0'; ++character)
+        state.search_append(*character);
+
+    const std::vector<int> expected = {0, 1, 2};
+    CHECK(state.visible() == expected);
+    CHECK(state.match_count() == 1);
+}
+
+TEST_CASE("state: search ignores the fold state") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    CHECK_FALSE(state.is_expanded(1));
+
+    state.begin_search();
+    state.search_append('g');
+    state.search_append('i');
+    state.search_append('c');
+
+    // /soc stays collapsed in the folded tree, but the matching grandchild shows.
+    const std::vector<int> expected = {0, 1, 3};
+    CHECK(state.visible() == expected);
+    CHECK_FALSE(state.is_expanded(1));
+}
+
+TEST_CASE("state: cancel search restores folds, cursor and scroll") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    state.move_cursor(1); // /soc/serial@5000000
+    const std::vector<int> before = state.visible();
+    const int cursor_before = state.cursor();
+
+    state.begin_search();
+    state.search_append('u');
+    state.search_append('a');
+    state.search_append('r');
+    CHECK(state.visible() != before);
+
+    state.cancel_search();
+    CHECK_FALSE(state.search_active());
+    CHECK_FALSE(state.is_filtering());
+    CHECK(state.visible() == before);
+    CHECK(state.cursor() == cursor_before);
+    CHECK(state.current_node().path == "/soc/serial@5000000");
+    CHECK(state.is_expanded(1));
+}
+
+TEST_CASE("state: backspacing an empty filter restores the tree") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    const std::vector<int> before = state.visible();
+
+    state.begin_search();
+    state.search_append('z');
+    CHECK(state.visible().empty()); // nothing matches "z"
+    state.search_backspace();
+    CHECK_FALSE(state.is_filtering());
+    CHECK(state.visible() == before);
+
+    state.confirm_search();
+    CHECK_FALSE(state.search_active());
+}
+
+TEST_CASE("state: a filter without matches yields an empty visible list") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.begin_search();
+    state.search_append('q');
+    state.search_append('q');
+    state.search_append('q');
+
+    CHECK(state.visible().empty());
+    CHECK(state.match_count() == 0);
+    state.move_cursor(1); // must not crash
+    CHECK(state.visible().empty());
+}
+
+TEST_CASE("state: jump follows a phandle, backspace walks back") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    state.move_cursor(1); // /soc/serial@5000000
+    CHECK(state.current_node().path == "/soc/serial@5000000");
+
+    state.set_focus(ui::Focus::Props);
+    CHECK(state.selected_property()->name == "interrupt-parent");
+    CHECK(ui::has_resolvable_ref(*state.selected_property()));
+
+    CHECK(state.jump_to_selected_ref());
+    CHECK(state.current_node().path == "/soc/gic");
+    CHECK(state.jump_depth() == 1);
+    CHECK(state.is_expanded(0));
+    CHECK(state.is_expanded(1));
+
+    CHECK(state.jump_back());
+    CHECK(state.current_node().path == "/soc/serial@5000000");
+    CHECK(state.jump_depth() == 0);
+    CHECK(state.is_expanded(1));
+
+    CHECK_FALSE(state.jump_back());
+}
+
+TEST_CASE("state: jump clears an active filter") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    state.move_cursor(1); // /soc/serial@5000000
+    state.set_focus(ui::Focus::Props);
+
+    state.begin_search();
+    state.search_append('s');
+    CHECK(state.is_filtering());
+
+    CHECK(state.jump_to_selected_ref());
+    CHECK_FALSE(state.is_filtering());
+    CHECK_FALSE(state.search_active());
+    CHECK(state.current_node().path == "/soc/gic");
+}
+
+TEST_CASE("state: unresolved phandle refuses to jump and explains itself") {
+    dtb::Tree tree = phandle_tree();
+    tree.nodes[2].props[0].refs[0].node = -1;
+    ui::State state(tree);
+    state.move_cursor(1); // /soc
+    state.expand_current();
+    state.move_cursor(1); // /soc/serial@5000000
+    state.set_focus(ui::Focus::Props);
+
+    CHECK_FALSE(state.jump_to_selected_ref());
+    CHECK(state.jump_depth() == 0);
+    CHECK(state.current_node().path == "/soc/serial@5000000");
+    CHECK(state.message().find("未解析") != std::string::npos);
+    CHECK(ui::has_resolvable_ref(*state.selected_property()) == false);
+
+    state.clear_message();
+    CHECK(state.message().empty());
+}
+
+TEST_CASE("state: Enter on a property without refs does nothing") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.move_cursor(1); // /soc, first property is none
+    state.set_focus(ui::Focus::Props);
+
+    CHECK(state.selected_property() == nullptr);
+    CHECK_FALSE(state.jump_to_selected_ref());
+    CHECK(state.message().empty());
+}
+
+TEST_CASE("state: clicking a tree row selects it and moves the focus") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.set_focus(ui::Focus::Props);
+    state.set_tree_box(ui::PaneBox{10, 5, 40, 9});
+
+    state.click(20, 6); // row 1 = /soc, text column (not the glyph)
+    CHECK(state.focus() == ui::Focus::Tree);
+    CHECK(state.current_node().path == "/soc");
+
+    state.click(20, 30); // outside the pane
+    CHECK(state.current_node().path == "/soc");
+
+    state.click(20, 8); // row 3, past the last visible row
+    CHECK(state.current_node().path == "/soc");
+}
+
+TEST_CASE("state: clicking the fold glyph only toggles") {
+    const dtb::Tree tree = phandle_tree();
+    ui::State state(tree);
+    state.set_tree_box(ui::PaneBox{10, 5, 40, 9});
+    CHECK(state.cursor() == 0);
+
+    CHECK(state.tree_toggle_at(12, 6)); // /soc's glyph sits at x = 10 + depth*2
+    state.click(12, 6);
+    CHECK(state.is_expanded(1));
+    CHECK(state.current_node().path == "/");
+
+    state.click(12, 6);
+    CHECK_FALSE(state.is_expanded(1));
+    CHECK(state.current_node().path == "/");
+}
+
+TEST_CASE("state: clicking a property row selects it") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+    state.set_focus(ui::Focus::Tree);
+    state.set_props_box(ui::PaneBox{50, 5, 90, 9});
+
+    state.click(55, 5);
+    CHECK(state.focus() == ui::Focus::Props);
+    CHECK(state.props_cursor() == 0);
+
+    state.click(55, 7); // third row
+    CHECK(state.props_cursor() == 2);
+    CHECK(state.selected_property()->name == "root-2");
+}
+
+TEST_CASE("state: mouse wheel scrolls three rows and keeps the cursor inside") {
+    const dtb::Tree tree = wide_tree();
+    ui::State state(tree);
+    state.set_tree_box(ui::PaneBox{10, 5, 40, 9}); // 5 rows
+
+    state.wheel(12, 6, 1); // wheel down inside the tree pane
+    CHECK(state.scroll() == 3);
+    CHECK(state.cursor() == 3);
+    CHECK(state.cursor() >= state.scroll());
+    CHECK(state.cursor() < state.scroll() + state.window_height());
+
+    state.wheel(12, 6, -1);
+    CHECK(state.scroll() == 0);
+    CHECK(state.cursor() == 3);
+
+    state.wheel(100, 6, 1); // outside every pane
+    CHECK(state.scroll() == 0);
+}
+
+TEST_CASE("state: wheel scrolling the property pane keeps its cursor inside") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+    state.set_props_box(ui::PaneBox{50, 5, 90, 9}); // 5 rows
+
+    state.wheel(60, 6, 1);
+    CHECK(state.props_scroll() == 0); // 5 properties fit in 5 rows
+    CHECK(state.props_cursor() == 0);
+}
+
+TEST_CASE("state: help overlay toggles") {
+    const dtb::Tree tree = sample_tree();
+    ui::State state(tree);
+
+    CHECK_FALSE(state.help_visible());
+    state.toggle_help();
+    CHECK(state.help_visible());
+    state.close_help();
+    CHECK_FALSE(state.help_visible());
+}
+
+namespace {
+
+// / (0) -> uart@1 (1), clk@2 (2), pins (3, structural with pin-group properties)
+dtb::Tree typed_tree() {
+    dtb::Tree tree;
+    dtb::Node root = node("/", "/", -1, 0, {1, 2, 3});
+    root.kind = dtb::DeviceKind::Structural;
+    tree.nodes.push_back(root);
+
+    dtb::Node uart = node("uart@1", "/uart@1", 0, 1);
+    uart.kind = dtb::DeviceKind::Serial;
+    tree.nodes.push_back(uart);
+
+    dtb::Node clk = node("clk@2", "/clk@2", 0, 1);
+    clk.kind = dtb::DeviceKind::Clock;
+    tree.nodes.push_back(clk);
+
+    dtb::Node pins = node("pins@3", "/pins@3", 0, 1);
+    pins.kind = dtb::DeviceKind::Structural;
+    tree.nodes.push_back(pins);
+    return tree;
+}
+
+} // namespace
+
+TEST_CASE("state: the type panel lists classified kinds with their counts") {
+    const dtb::Tree tree = typed_tree();
+    ui::State state(tree);
+
+    // Rows follow the enum order, not the dtb order.
+    REQUIRE(state.types().size() == 2);
+    CHECK(state.types()[0].kind == dtb::DeviceKind::Clock);
+    CHECK(state.types()[0].count == 1);
+    CHECK(state.types()[1].kind == dtb::DeviceKind::Serial);
+    CHECK(state.selected_type()->kind == dtb::DeviceKind::Clock);
+
+    CHECK(state.type_enabled(dtb::DeviceKind::Serial));
+    CHECK_FALSE(state.type_filter_active());
+}
+
+TEST_CASE("state: disabling a type hides its nodes and keeps structure") {
+    const dtb::Tree tree = typed_tree();
+    ui::State state(tree);
+    state.toggle_type(); // row 0 is 时钟
+    CHECK_FALSE(state.type_enabled(dtb::DeviceKind::Clock));
+    CHECK(state.type_filter_active());
+    CHECK(state.disabled_type_count() == 1);
+    // /clk@2 is gone; the structural pin node stays.
+    const std::vector<int> expected = {0, 1, 3};
+    CHECK(state.visible() == expected);
+
+    state.toggle_type(); // enable it again
+    CHECK(state.visible() == std::vector<int>({0, 1, 2, 3}));
+    CHECK_FALSE(state.type_filter_active());
+}
+
+TEST_CASE("state: disabling a type moves the cursor to a visible ancestor") {
+    const dtb::Tree tree = typed_tree();
+    ui::State state(tree);
+    state.move_cursor(2); // /clk@2
+    CHECK(state.current_node().path == "/clk@2");
+
+    state.toggle_type(); // 时钟 off
+    CHECK(state.current_node().path == "/");
+}
+
+TEST_CASE("state: the solo view keeps only that type and its ancestors") {
+    const dtb::Tree tree = typed_tree();
+    ui::State state(tree);
+    CHECK_FALSE(state.is_expanded(1));
+
+    state.toggle_solo(); // 时钟
+    CHECK(state.solo().has_value());
+    CHECK(state.type_filter_active());
+    CHECK(state.visible() == std::vector<int>({0, 2}));
+    CHECK(state.current_node().path == "/clk@2");
+
+    CHECK(state.cancel_solo());
+    CHECK_FALSE(state.solo().has_value());
+    CHECK(state.visible() == std::vector<int>({0, 1, 2, 3}));
+    CHECK_FALSE(state.cancel_solo());
+}
+
+TEST_CASE("state: a solo view ignores the disabled set until it is left") {
+    const dtb::Tree tree = typed_tree();
+    ui::State state(tree);
+    state.toggle_type(); // mask 时钟
+    CHECK(state.visible() == std::vector<int>({0, 1, 3}));
+    state.toggle_solo(); // solo 时钟 wins over the mask
+    CHECK(state.visible() == std::vector<int>({0, 2}));
+
+    state.toggle_solo(); // back to masking
+    CHECK(state.visible() == std::vector<int>({0, 1, 3}));
+}
+
+TEST_CASE("state: clicking the type panel toggles without moving its cursor") {
+    const dtb::Tree tree = typed_tree();
+    ui::State state(tree);
+    state.set_types_box(ui::PaneBox{10, 30, 40, 33});
+    state.set_focus(ui::Focus::Tree);
+
+    CHECK(state.types_toggle_at(10, 31));
+    state.click(10, 31); // `[x]` box of the second row (串口)
+    CHECK(state.focus() == ui::Focus::Types);
+    CHECK_FALSE(state.type_enabled(dtb::DeviceKind::Serial));
+    CHECK(state.types_cursor() == 0);
+
+    state.click(20, 31); // the row text selects it
+    CHECK(state.types_cursor() == 1);
+
+    state.click(20, 40); // outside the pane
+    CHECK(state.types_cursor() == 1);
+}
+
+TEST_CASE("state: the wheel scrolls the type panel and keeps its cursor inside") {
+    dtb::Tree tree;
+    dtb::Node root = node("/", "/", -1, 0);
+    root.kind = dtb::DeviceKind::Structural;
+    std::vector<int> children;
+    for (int i = 0; i < 8; ++i) {
+        dtb::Node child = node("n" + std::to_string(i), "/n" + std::to_string(i), 0, 1);
+        child.kind = static_cast<dtb::DeviceKind>(static_cast<int>(dtb::DeviceKind::Cpu) + i);
+        children.push_back(i + 1);
+        tree.nodes.push_back(child);
+    }
+    tree.nodes[0].children = children;
+
+    ui::State state(tree);
+    state.set_types_box(ui::PaneBox{10, 30, 40, 33}); // 3 rows
+    CHECK(state.types_cursor() == 0);
+
+    state.wheel(12, 31, 1);
+    CHECK(state.types_scroll() == 3);
+    CHECK(state.types_cursor() >= state.types_scroll());
+    CHECK(state.types_cursor() < state.types_scroll() + state.types_window_height());
 }

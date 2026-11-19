@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "dtb/classify.hpp"
 #include "dtb/decode.hpp"
 #include "dtb/loader.hpp"
 #include "dtb/model.hpp"
@@ -48,7 +49,8 @@ void dump_property(const dtb::Property& prop, const std::string& indent, std::os
 void dump_tree(const dtb::Tree& tree, std::ostream& out) {
     for (const dtb::Node& node : tree.nodes) {
         const std::string indent(node.depth * 2, ' ');
-        out << indent << node.path << " (depth " << node.depth << ")\n";
+        out << indent << node.path << " (depth " << node.depth
+            << ", 类型: " << dtb::device_kind_name(node.kind) << ")\n";
 
         const std::string prop_indent(node.depth * 2 + 2, ' ');
         for (const dtb::Property& prop : node.props)
@@ -107,6 +109,7 @@ int main(int argc, char** argv) {
     }
 
     dtb::Tree tree = std::move(*result.tree);
+    dtb::classify(tree);
     dtb::decode(tree);
     if (dump) {
         dump_tree(tree, std::cout);
