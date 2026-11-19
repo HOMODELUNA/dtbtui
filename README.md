@@ -6,6 +6,8 @@
 dtbtui /boot/dtb/allwinner/sun60i-a733-orangepi-4-pro.dtb
 ```
 
+![](docs/pic/title.webp)
+
 界面布局见下文「界面」一节。
 
 ## 功能
