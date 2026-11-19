@@ -1,5 +1,6 @@
 add_rules("mode.debug", "mode.release")
 add_languages("c++20")
+set_policy("package.install_locally", true)
 add_requires("ftxui")
 add_requires("fmt 12.2.1")
 add_requires("argparse v3.2")
