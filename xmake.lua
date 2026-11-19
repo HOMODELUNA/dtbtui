@@ -1,6 +1,16 @@
 add_rules("mode.debug", "mode.release")
 add_languages("c++20")
 set_policy("package.install_locally", true)
+
+-- `xmake f --static-build=y` produces a self-contained elf.
+option("static-build")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Link statically, so the elf runs without runtime or libraries")
+option_end()
+
+local static_build = has_config("static-build")
+
 add_requires("ftxui")
 add_requires("fmt 12.2.1")
 add_requires("argparse v3.2")
@@ -27,6 +37,11 @@ target("dtbtui")
     add_files("src/*.cpp")
     add_files("src/**/*.cpp")
     add_packages("ftxui", "libfdt", "fmt", "argparse")
+    if static_build then
+        -- -no-pie keeps the result a plain ET_EXEC; musl toolchains default to
+        -- static-pie, which a few kernels refuse to start.
+        add_ldflags("-static", "-no-pie", {force = true})
+    end
 
 target("tests")
     set_default(false)

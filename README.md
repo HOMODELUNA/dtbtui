@@ -39,11 +39,19 @@ xmake f -m release && xmake b    # 发布构建
 
 产物在 `build/<os>/<arch>/<mode>/dtbtui`。本机为 `build/linux/arm64/debug/dtbtui`。
 
-新增源文件后重生成编译数据库：
+### 静态构建（可分发）
+
+`--static-build=y` 搭配 musl 工具链, 产出不依赖运行库的单个 elf：
 
 ```bash
-xmake project -k compile_commands
+xmake f --static-build=y --toolchain=cross \
+        --sdk=~/ssd/usr/opt/aarch64-linux-musl-native
+xmake b
+file build/linux/arm64/release/dtbtui
+# ... ELF 64-bit LSB executable, ARM aarch64, ... statically linked, stripped
 ```
+
+把 `build/<os>/<arch>/<mode>/dtbtui` 拷到同架构目标机即可运行。
 
 ## 用法
 
