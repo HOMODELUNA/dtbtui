@@ -45,7 +45,7 @@ constexpr std::array<Binding, 9> kTree = {{
 constexpr std::array<Binding, 7> kTypes = {{
     {"j / ↓", "光标下移"},
     {"k / ↑", "光标上移"},
-    {"Space", "开启 / 关闭该类型"},
+    {"Space", "启用 / 关闭该类型"},
     {"Enter", "单独显示该类型 / 取消单独显示"},
     {"g / G", "跳到首个 / 最后一个类型"},
     {"Ctrl-D / Ctrl-U · PgDn / PgUp", "翻页"},
