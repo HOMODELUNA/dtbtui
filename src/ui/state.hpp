@@ -107,9 +107,6 @@ public:
     void set_focus(Focus focus) { focus_ = focus; }
     void toggle_focus() { focus_ = focus_ == Focus::Tree ? Focus::Props : Focus::Tree; }
 
-    bool show_reason() const { return show_reason_; }
-    void toggle_reason() { show_reason_ = !show_reason_; }
-
     bool help_visible() const { return help_visible_; }
     void toggle_help() { help_visible_ = !help_visible_; }
     void close_help() { help_visible_ = false; }
@@ -592,7 +589,6 @@ private:
     PaneBox props_box_;
 
     Focus focus_ = Focus::Tree;
-    bool show_reason_ = false;
     int props_node_ = -1;
     int props_cursor_ = 0;
     int props_scroll_ = 0;

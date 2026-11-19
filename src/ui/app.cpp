@@ -127,10 +127,6 @@ bool handle_key(State& state, const ftxui::Event& event, ftxui::App& app) {
         state.toggle_focus();
         return true;
     }
-    if (event == ftxui::Event::Character('i')) {
-        state.toggle_reason();
-        return true;
-    }
 
     const bool tree_focused = state.focus() == Focus::Tree;
     if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {

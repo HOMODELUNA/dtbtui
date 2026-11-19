@@ -42,14 +42,13 @@ constexpr std::array<Binding, 9> kTree = {{
     {"鼠标左键", "点行选中；点 ▸/▾ 只切换折叠"},
 }};
 
-constexpr std::array<Binding, 9> kProps = {{
+constexpr std::array<Binding, 8> kProps = {{
     {"j / ↓", "光标下移"},
     {"k / ↑", "光标上移"},
     {"Enter", "跳到可解析 phandle 的目标节点"},
     {"Backspace", "沿跳转栈回退上一个节点"},
     {"g / G", "跳到首个 / 最后一个属性"},
     {"Ctrl-D / Ctrl-U · PgDn / PgUp", "翻页"},
-    {"i", "展开/收起详情里的类型判定依据"},
     {"Tab / Shift-Tab", "回到树面板"},
     {"鼠标左键", "点行选中"},
 }};
