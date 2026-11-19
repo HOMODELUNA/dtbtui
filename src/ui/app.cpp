@@ -1,6 +1,7 @@
 #include "ui/app.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -11,6 +12,8 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/dom/node.hpp>
+#include <ftxui/screen/screen.hpp>
 
 #include "dtb/classify.hpp"
 #include "dtb/model.hpp"
@@ -57,6 +60,51 @@ std::string status_line(const State& state) {
     if (state.jump_depth() != 0) line += fmt::format(" | 跳转栈: {}", state.jump_depth());
     if (!state.message().empty()) line += " | " + state.message();
     return line;
+}
+
+// Recolours the one-cell frame of a panel.  FTXUI's `color` decorator tints
+// the whole subtree, so the frame is repainted cell by cell after the panel is
+// drawn: the border and its title turn green, the content keeps its colours.
+class FrameTint : public ftxui::Node {
+public:
+    FrameTint(ftxui::Element child, ftxui::Color color)
+        : ftxui::Node({std::move(child)})
+        , color_(color) {}
+
+    void ComputeRequirement() override {
+        children_[0]->ComputeRequirement();
+        requirement_ = children_[0]->requirement();
+    }
+
+    void SetBox(ftxui::Box box) override {
+        box_ = box;
+        children_[0]->SetBox(box);
+    }
+
+    void Render(ftxui::Screen& screen) override {
+        children_[0]->Render(screen);
+        for (int y = box_.y_min; y <= box_.y_max; ++y) {
+            for (int x = box_.x_min; x <= box_.x_max; ++x) {
+                const bool on_frame
+                    = x == box_.x_min || x == box_.x_max || y == box_.y_min || y == box_.y_max;
+                if (on_frame) screen.PixelAt(x, y).foreground_color = color_;
+            }
+        }
+    }
+
+private:
+    ftxui::Color color_;
+};
+
+// A titled panel.  The focused one is drawn with a heavy bright green frame and
+// a bold title; the others keep a thin, default coloured one.
+ftxui::Element panel(ftxui::Element title, ftxui::Element content, bool focused) {
+    if (focused) title = std::move(title) | ftxui::bold;
+    ftxui::Element framed = ftxui::window(
+        std::move(title), std::move(content), focused ? ftxui::HEAVY : ftxui::ROUNDED
+    );
+    if (!focused) return framed;
+    return std::make_shared<FrameTint>(std::move(framed), ftxui::Color::GreenLight);
 }
 
 // Search input line placeholder shown in place of the status line.
@@ -236,36 +284,25 @@ int run(const dtb::Tree& tree) {
         const bool types_focused = state.focus() == Focus::Types;
         const bool props_focused = state.focus() == Focus::Props;
 
-        ftxui::Element tree_title = ftxui::text("设备树");
-        ftxui::Element types_title = ftxui::text(fmt::format("类型 ({})", state.types().size()));
-        ftxui::Element props_title = ftxui::text("属性");
-        if (tree_focused) tree_title = tree_title | ftxui::bold;
-        if (types_focused) types_title = types_title | ftxui::bold;
-        if (props_focused) props_title = props_title | ftxui::bold;
+        const ftxui::Element tree_title = ftxui::text("设备树");
+        const ftxui::Element types_title
+            = ftxui::text(fmt::format("类型 ({})", state.types().size()));
+        const ftxui::Element props_title = ftxui::text("属性");
 
         const ftxui::Element tree_panel
-            = ftxui::window(
-                  tree_title, tree_pane(tree, state), tree_focused ? ftxui::HEAVY : ftxui::ROUNDED
-              )
-            | ftxui::flex;
+            = panel(tree_title, tree_pane(tree, state), tree_focused) | ftxui::flex;
         // The type panel keeps its natural height (one row per type plus the
         // frame), but never more than a third of the body, so the tree keeps
         // the rest of the column.
         const int body_rows = std::max(5, app.dimy() - 4);
         const int types_rows = static_cast<int>(state.types().size()) + 2;
         const int types_height = std::clamp(types_rows, 3, std::max(3, body_rows / 3));
-        const ftxui::Element types_panel
-            = ftxui::window(
-                  types_title, types_pane(state), types_focused ? ftxui::HEAVY : ftxui::ROUNDED
-              )
-            | ftxui::size(ftxui::HEIGHT, ftxui::EQUAL, types_height);
+        const ftxui::Element types_panel = panel(types_title, types_pane(state), types_focused)
+                                         | ftxui::size(ftxui::HEIGHT, ftxui::EQUAL, types_height);
         const ftxui::Element left = ftxui::vbox({tree_panel, types_panel}) | ftxui::flex
                                   | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, left_width);
         const ftxui::Element props_panel
-            = ftxui::window(
-                  props_title, props_pane(state), props_focused ? ftxui::HEAVY : ftxui::ROUNDED
-              )
-            | ftxui::flex;
+            = panel(props_title, props_pane(state), props_focused) | ftxui::flex;
         const dtb::Property* selected_prop = state.selected_property();
         ftxui::Element detail_title = ftxui::text("详情");
         if (selected_prop != nullptr) {
