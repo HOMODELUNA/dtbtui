@@ -52,11 +52,12 @@ constexpr std::array<Binding, 7> kTypes = {{
     {"鼠标左键", "点 [x] 开关该类型；点行选中"},
 }};
 
-constexpr std::array<Binding, 7> kProps = {{
+constexpr std::array<Binding, 8> kProps = {{
     {"j / ↓", "光标下移"},
     {"k / ↑", "光标上移"},
     {"Enter", "跳到可解析 phandle 的目标节点"},
     {"Backspace", "沿跳转栈回退上一个节点"},
+    {"h / ←", "焦点移到设备树面板"},
     {"g / G", "跳到首个 / 最后一个属性"},
     {"Ctrl-D / Ctrl-U · PgDn / PgUp", "翻页"},
     {"鼠标左键", "点行选中"},

@@ -218,7 +218,9 @@ bool handle_key(State& state, const ftxui::Event& event, ftxui::App& app) {
         return true;
     }
     if (event == ftxui::Event::Character('h') || event == ftxui::Event::ArrowLeft) {
-        if (tree_focused) state.collapse_current();
+        // Left walks back through the panes: props → tree.
+        if (tree_focused) { state.collapse_current(); }
+        else if (!types_focused) { state.set_focus(Focus::Tree); }
         return true;
     }
     if (event == ftxui::Event::Character(' ')) {

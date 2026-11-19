@@ -166,6 +166,7 @@ dtbtui — /boot/dtb/allwinner/sun60i-a733-orangepi-4-pro.dtb — 877 节点 / 7
 | --- | --- |
 | `j` / `↓`、`k` / `↑` | 光标下移、上移 |
 | `Enter` | 跳到可解析 phandle 的目标节点 |
+| `h` / `←` | 焦点移到设备树面板 |
 | `Backspace` | 沿跳转栈退回上一个节点 |
 | `g` / `G` | 首个、最后一个属性 |
 | `Ctrl-D` / `Ctrl-U`、`PgDn` / `PgUp` | 翻页 |
