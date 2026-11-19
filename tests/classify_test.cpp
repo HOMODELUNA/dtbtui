@@ -129,6 +129,74 @@ TEST_CASE("classify: the root is a container") {
     CHECK(dtb::classify_node(root) == dtb::DeviceKind::Structural);
 }
 
+TEST_CASE("classify: upstream (mainline) bindings are recognised") {
+    // Banana Pi M3 (sun8i-a83t) is a pure upstream blob: no Allwinner BSP names.
+    CHECK(
+        dtb::classify_node(device("sound_hdmi", "allwinner,sun9i-a80-hdmi-audio"))
+        == dtb::DeviceKind::Audio
+    );
+    CHECK(
+        dtb::classify_node(device("spdif@1c21000", "allwinner,sun8i-a83t-spdif"))
+        == dtb::DeviceKind::Audio
+    );
+    CHECK(dtb::classify_node(device("scpi", "arm,scpi")) == dtb::DeviceKind::Firmware);
+    CHECK(
+        dtb::classify_node(device("cpucfg@1700000", "allwinner,sun8i-a83t-cpucfg"))
+        == dtb::DeviceKind::Cpu
+    );
+    CHECK(
+        dtb::classify_node(device("mixer@1100000", "allwinner,sun8i-a83t-de2-mixer-0"))
+        == dtb::DeviceKind::Display
+    );
+    CHECK(
+        dtb::classify_node(device("rotate@1020000", "allwinner,sun8i-a83t-de2-rotate"))
+        == dtb::DeviceKind::Display
+    );
+    CHECK(dtb::classify_node(device("connector", "hdmi-connector")) == dtb::DeviceKind::Display);
+    CHECK(dtb::classify_node(device("cci@1790000", "arm,cci-400")) == dtb::DeviceKind::Bus);
+    CHECK(
+        dtb::classify_node(device("syscon@1c00000", "allwinner,sun8i-a83t-system-controller"))
+        == dtb::DeviceKind::Bus
+    );
+    CHECK(
+        dtb::classify_node(device("dram-controller@1c62000", "allwinner,sun8i-a83t-mbus"))
+        == dtb::DeviceKind::Memory
+    );
+    CHECK(dtb::classify_node(device("sram@40000", "mmio-sram")) == dtb::DeviceKind::Memory);
+    CHECK(
+        dtb::classify_node(device("scp-shmem@13c00", "arm,scp-shmem")) == dtb::DeviceKind::Memory
+    );
+    CHECK(
+        dtb::classify_node(device("video-codec@1c0e000", "allwinner,sun8i-a83t-video-engine"))
+        == dtb::DeviceKind::Video
+    );
+    CHECK(
+        dtb::classify_node(device("camera@1cb0000", "allwinner,sun8i-a83t-csi"))
+        == dtb::DeviceKind::Camera
+    );
+    CHECK(dtb::classify_node(device("wifi@1", "brcm,bcm4329-fmac")) == dtb::DeviceKind::Wireless);
+    CHECK(dtb::classify_node(device("bluetooth", "brcm,bcm43438-bt")) == dtb::DeviceKind::Wireless);
+    CHECK(
+        dtb::classify_node(device("eeprom@1c14000", "allwinner,sun8i-a83t-sid"))
+        == dtb::DeviceKind::Crypto
+    );
+    CHECK(
+        dtb::classify_node(device("ir@1f02000", "allwinner,sun8i-a83t-ir")) == dtb::DeviceKind::Adc
+    );
+    CHECK(
+        dtb::classify_node(device("rsb@1f03400", "allwinner,sun8i-a83t-rsb"))
+        == dtb::DeviceKind::I2c
+    );
+    CHECK(dtb::classify_node(device("pwrseq", "mmc-pwrseq-simple")) == dtb::DeviceKind::Power);
+}
+
+TEST_CASE("classify: the DE2 display rules do not capture the DE2 clock") {
+    CHECK(
+        dtb::classify_node(device("clock@1000000", "allwinner,sun8i-a83t-de2-clk"))
+        == dtb::DeviceKind::Clock
+    );
+}
+
 TEST_CASE("classify: unknown devices land in Other, unknown data in Structural") {
     CHECK(dtb::classify_node(device("widget@1", "vendor,widget")) == dtb::DeviceKind::Other);
     CHECK(dtb::classify_node(device("scratch", "")) == dtb::DeviceKind::Structural);
